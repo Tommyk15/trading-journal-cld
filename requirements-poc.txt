@@ -1,0 +1,21 @@
+# POC Phase Requirements
+# Install with: pip install -r requirements-poc.txt
+
+# IBKR API
+ibapi>=9.81.1
+
+# Polygon.io API
+polygon-api-client>=1.12.0
+
+# Data handling
+pandas>=2.0.0
+
+# Jupyter for POC #3
+jupyter>=1.0.0
+notebook>=7.0.0
+matplotlib>=3.7.0
+plotly>=5.14.0
+
+# Utils
+python-dotenv>=1.0.0
+requests>=2.31.0
