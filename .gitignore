@@ -76,3 +76,18 @@ api_keys.txt
 tmp/
 temp/
 *.tmp
+
+# Alembic
+alembic/versions/*.pyc
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Coverage
+.coverage.*
+coverage.xml
+
+# Distribution
+*.whl
