@@ -1,223 +1,413 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api/client';
-import { formatCurrency, formatDate } from '@/lib/utils';
-import { Calendar, AlertCircle } from 'lucide-react';
-import type { UpcomingExpiration } from '@/types';
+import { formatCurrency } from '@/lib/utils';
+import { ChevronLeft, ChevronRight, Settings, Camera, Info } from 'lucide-react';
+
+interface Trade {
+  id: number;
+  underlying: string;
+  strategy_type: string;
+  status: string;
+  opened_at: string;
+  closed_at: string | null;
+  realized_pnl: string | null;
+}
+
+interface DayData {
+  date: Date;
+  pnl: number;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  trades: Trade[];
+}
+
+interface WeekData {
+  weekNum: number;
+  pnl: number;
+  tradingDays: number;
+}
 
 export default function CalendarPage() {
-  const [expirations, setExpirations] = useState<UpcomingExpiration[]>([]);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
-  const [daysAhead, setDaysAhead] = useState(30);
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
 
-  async function fetchExpirations() {
+  async function fetchTrades() {
     try {
       setLoading(true);
-      const data = await api.calendar.upcomingExpirations(daysAhead);
-      // API returns { expirations: [...] }, extract the array
-      const expArray = (data as any)?.expirations || data || [];
-      setExpirations(Array.isArray(expArray) ? expArray : []);
+      const data: any = await api.trades.list({ limit: 10000 });
+      const fetchedTrades = data.trades || [];
+      setTrades(fetchedTrades);
     } catch (error) {
-      console.error('Error fetching expirations:', error);
-      setExpirations([]);
+      console.error('Error fetching trades:', error);
+      setTrades([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    fetchExpirations();
-  }, [daysAhead]);
+    fetchTrades();
+  }, []);
 
-  const totalPositionsExpiring = (expirations || []).reduce(
-    (sum, exp: any) => sum + (exp.position_count || 0),
-    0
-  );
+  // Format date to YYYY-MM-DD in local timezone
+  function formatDateLocal(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format currency in K format
+  function formatK(amount: number): string {
+    if (Math.abs(amount) >= 1000) {
+      return `${amount >= 0 ? '' : '-'}$${Math.abs(amount / 1000).toFixed(2)}K`;
+    }
+    return `${amount >= 0 ? '' : '-'}$${Math.abs(amount).toFixed(0)}`;
+  }
+
+  // Get days in month with padding
+  function getDaysInMonth(date: Date): Date[] {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+
+    const days: Date[] = [];
+
+    // Add padding days from previous month
+    const startDayOfWeek = firstDay.getDay();
+    for (let i = startDayOfWeek - 1; i >= 0; i--) {
+      const d = new Date(year, month, -i);
+      days.push(d);
+    }
+
+    // Add days of current month
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      days.push(new Date(year, month, d));
+    }
+
+    // Add padding days from next month to complete 6 rows (42 days)
+    while (days.length < 42) {
+      const nextDay = days.length - startDayOfWeek - lastDay.getDate() + 1;
+      days.push(new Date(year, month + 1, nextDay));
+    }
+
+    return days;
+  }
+
+  // Calculate day data from trades
+  function getDayData(date: Date): DayData {
+    const dateStr = formatDateLocal(date);
+
+    let pnl = 0;
+    let winningTrades = 0;
+    let losingTrades = 0;
+    const dayTrades: Trade[] = [];
+
+    trades.forEach(trade => {
+      const closedDate = trade.closed_at ? trade.closed_at.split('T')[0] : null;
+
+      if (closedDate === dateStr) {
+        const tradePnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : 0;
+        pnl += tradePnl;
+        if (tradePnl > 0) winningTrades++;
+        else if (tradePnl < 0) losingTrades++;
+        dayTrades.push(trade);
+      }
+    });
+
+    return {
+      date,
+      pnl,
+      totalTrades: dayTrades.length,
+      winningTrades,
+      losingTrades,
+      trades: dayTrades
+    };
+  }
+
+  // Calculate weekly summaries
+  function getWeeklyData(days: Date[]): WeekData[] {
+    const weeks: WeekData[] = [];
+
+    for (let i = 0; i < 6; i++) {
+      const weekDays = days.slice(i * 7, (i + 1) * 7);
+      let weekPnl = 0;
+      let tradingDays = 0;
+
+      weekDays.forEach(day => {
+        if (isCurrentMonth(day)) {
+          const dayData = getDayData(day);
+          if (dayData.totalTrades > 0) {
+            weekPnl += dayData.pnl;
+            tradingDays++;
+          }
+        }
+      });
+
+      weeks.push({ weekNum: i + 1, pnl: weekPnl, tradingDays });
+    }
+
+    return weeks;
+  }
+
+  // Navigate months
+  function prevMonth() {
+    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
+    setSelectedDay(null);
+  }
+
+  function nextMonth() {
+    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
+    setSelectedDay(null);
+  }
+
+  function goToThisMonth() {
+    setCurrentMonth(new Date());
+    setSelectedDay(null);
+  }
+
+  // Check if date is in current month
+  function isCurrentMonth(date: Date): boolean {
+    return date.getMonth() === currentMonth.getMonth() && date.getFullYear() === currentMonth.getFullYear();
+  }
+
+  // Check if date is today
+  function isToday(date: Date): boolean {
+    const today = new Date();
+    return date.toDateString() === today.toDateString();
+  }
+
+  // Get background color class based on P&L
+  function getDayBgClass(dayData: DayData, isInMonth: boolean): string {
+    if (!isInMonth) return 'bg-gray-50';
+    if (dayData.totalTrades === 0) return 'bg-white';
+    if (dayData.pnl > 0) return 'bg-green-100';
+    if (dayData.pnl < 0) return 'bg-red-100';
+    return 'bg-gray-100';
+  }
+
+  const days = getDaysInMonth(currentMonth);
+  const weeklyData = getWeeklyData(days);
+
+  // Calculate monthly totals
+  const monthlyData = days.filter(d => isCurrentMonth(d)).map(d => getDayData(d));
+  const monthlyPnl = monthlyData.reduce((sum, d) => sum + d.pnl, 0);
+  const tradingDays = monthlyData.filter(d => d.totalTrades > 0).length;
+
+  const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   if (loading) {
     return (
-      <div>
-        <Header
-          title="Calendar"
-          subtitle="View upcoming option expirations and trade schedule"
-        />
-        <div className="p-6">
-          <div className="animate-pulse">
-            <div className="h-96 rounded-lg bg-gray-200" />
-          </div>
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="animate-pulse">
+          <div className="h-[600px] rounded-lg bg-gray-200" />
         </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <Header
-        title="Calendar"
-        subtitle="View upcoming option expirations and trade schedule"
-      />
+    <div className="min-h-screen bg-gray-100">
+      <div className="p-6">
+        <div className="flex gap-6">
+          {/* Main Calendar */}
+          <div className="flex-1 bg-white rounded-xl shadow-sm overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={prevMonth}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <ChevronLeft className="h-5 w-5 text-gray-600" />
+                </button>
+                <h2 className="text-lg font-semibold text-gray-900 min-w-[180px] text-center">
+                  {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </h2>
+                <button
+                  onClick={nextMonth}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <ChevronRight className="h-5 w-5 text-gray-600" />
+                </button>
+                <button
+                  onClick={goToThisMonth}
+                  className="ml-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  This month
+                </button>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-500">Monthly stats:</span>
+                  <span className={`font-semibold ${monthlyPnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                    {formatK(monthlyPnl)}
+                  </span>
+                  <span className="text-gray-400">|</span>
+                  <span className="text-gray-700">{tradingDays} days</span>
+                </div>
+                <div className="flex items-center gap-2 text-gray-400">
+                  <button className="p-1.5 hover:bg-gray-100 rounded"><Settings className="h-4 w-4" /></button>
+                  <button className="p-1.5 hover:bg-gray-100 rounded"><Camera className="h-4 w-4" /></button>
+                  <button className="p-1.5 hover:bg-gray-100 rounded"><Info className="h-4 w-4" /></button>
+                </div>
+              </div>
+            </div>
 
-      <div className="p-6 space-y-6">
-        {/* Summary */}
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="rounded-lg bg-white p-6 shadow">
-            <div className="flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-blue-600" />
-              <h3 className="text-sm font-medium text-gray-600">
-                Expiration Dates
-              </h3>
+            {/* Week Day Headers */}
+            <div className="grid grid-cols-7 border-b border-gray-100">
+              {weekDays.map(day => (
+                <div
+                  key={day}
+                  className="px-2 py-3 text-center text-sm font-medium text-gray-500"
+                >
+                  {day}
+                </div>
+              ))}
             </div>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
-              {expirations.length}
-            </p>
-            <p className="mt-1 text-sm text-gray-500">
-              in next {daysAhead} days
-            </p>
-          </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-orange-600" />
-              <h3 className="text-sm font-medium text-gray-600">
-                Positions Expiring
-              </h3>
+
+            {/* Calendar Grid */}
+            <div className="grid grid-cols-7">
+              {days.map((date, idx) => {
+                const dayData = getDayData(date);
+                const inMonth = isCurrentMonth(date);
+                const today = isToday(date);
+                const hasActivity = dayData.totalTrades > 0;
+                const winRate = dayData.totalTrades > 0
+                  ? ((dayData.winningTrades / dayData.totalTrades) * 100).toFixed(dayData.totalTrades > 2 ? 2 : 1)
+                  : 0;
+
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => hasActivity && inMonth ? setSelectedDay(dayData) : null}
+                    className={`
+                      min-h-[110px] p-2 border-b border-r border-gray-100 relative
+                      ${getDayBgClass(dayData, inMonth)}
+                      ${hasActivity && inMonth ? 'cursor-pointer hover:opacity-80' : ''}
+                      ${!inMonth ? 'opacity-40' : ''}
+                    `}
+                  >
+                    {/* Day Number */}
+                    <div className="flex justify-end">
+                      <span className={`
+                        text-sm font-medium
+                        ${today ? 'bg-blue-500 text-white w-7 h-7 rounded-full flex items-center justify-center' : ''}
+                        ${!today && inMonth ? 'text-gray-700' : ''}
+                        ${!inMonth ? 'text-gray-400' : ''}
+                      `}>
+                        {date.getDate()}
+                      </span>
+                    </div>
+
+                    {/* Day Stats */}
+                    {inMonth && hasActivity && (
+                      <div className="mt-1 text-center">
+                        <div className={`text-lg font-bold ${dayData.pnl >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                          {formatK(dayData.pnl)}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {dayData.totalTrades} trade{dayData.totalTrades !== 1 ? 's' : ''}
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {winRate}%
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
-              {totalPositionsExpiring}
-            </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <label className="block text-sm font-medium text-gray-700">
-              Days Ahead
-            </label>
-            <select
-              value={daysAhead}
-              onChange={(e) => setDaysAhead(Number(e.target.value))}
-              className="mt-2 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-            >
-              <option value={7}>7 days</option>
-              <option value={14}>14 days</option>
-              <option value={30}>30 days</option>
-              <option value={60}>60 days</option>
-              <option value={90}>90 days</option>
-            </select>
+
+          {/* Weekly Summary Sidebar */}
+          <div className="w-48 space-y-3">
+            {weeklyData.map((week) => (
+              <div
+                key={week.weekNum}
+                className="bg-white rounded-xl p-4 shadow-sm"
+              >
+                <div className="text-sm text-gray-500 mb-1">Week {week.weekNum}</div>
+                <div className={`text-xl font-bold ${week.pnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                  {week.pnl === 0 ? '$0' : formatK(week.pnl)}
+                </div>
+                <div className="mt-1">
+                  <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
+                    {week.tradingDays} day{week.tradingDays !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Expirations List */}
-        {expirations.length === 0 ? (
-          <div className="rounded-lg bg-white p-12 text-center shadow">
-            <Calendar className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-4 text-lg font-medium text-gray-900">
-              No Upcoming Expirations
-            </h3>
-            <p className="mt-2 text-sm text-gray-500">
-              You don't have any options expiring in the next {daysAhead} days.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {expirations.map((expiration, idx) => (
-              <div key={idx} className="rounded-lg bg-white shadow overflow-hidden">
-                <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        {formatDate(expiration.expiration_date)}
-                      </h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        {expiration.days_until === 0
-                          ? 'Expires today'
-                          : expiration.days_until === 1
-                          ? 'Expires tomorrow'
-                          : `${expiration.days_until} days until expiration`}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-gray-900">
-                        {expiration.position_count}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {expiration.position_count === 1 ? 'position' : 'positions'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
+        {/* Selected Day Details Modal */}
+        {selectedDay && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedDay(null)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {selectedDay.date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </h3>
+                <button
+                  onClick={() => setSelectedDay(null)}
+                  className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+                >
+                  &times;
+                </button>
+              </div>
 
-                {/* Positions Table */}
-                <div className="overflow-x-auto">
+              {/* Day Summary */}
+              <div className="px-6 py-4 grid grid-cols-4 gap-4 border-b border-gray-200">
+                <div>
+                  <p className="text-sm text-gray-500">P&L</p>
+                  <p className={`text-xl font-bold ${selectedDay.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(selectedDay.pnl)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Trades</p>
+                  <p className="text-xl font-bold text-gray-900">{selectedDay.totalTrades}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Winners</p>
+                  <p className="text-xl font-bold text-green-600">{selectedDay.winningTrades}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Losers</p>
+                  <p className="text-xl font-bold text-red-600">{selectedDay.losingTrades}</p>
+                </div>
+              </div>
+
+              {/* Trades List */}
+              {selectedDay.trades.length > 0 && (
+                <div className="overflow-auto max-h-[400px]">
                   <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-gray-50 sticky top-0">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Symbol
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Type
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Strike
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Quantity
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Current Price
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Market Value
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Unrealized P&L
-                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strategy</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">P&L</th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {expiration.positions.map((position) => (
-                        <tr key={position.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div>
-                              <div className="text-sm font-medium text-gray-900">
-                                {position.symbol}
-                              </div>
-                              <div className="text-sm text-gray-500">
-                                {position.underlying_symbol}
-                              </div>
-                            </div>
+                    <tbody className="divide-y divide-gray-200">
+                      {selectedDay.trades.map(trade => (
+                        <tr key={trade.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {trade.underlying}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {position.option_type}
+                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                            {trade.strategy_type}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            {formatCurrency(position.strike || 0)}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            {position.quantity}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            {position.current_price
-                              ? formatCurrency(position.current_price)
-                              : '-'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                            {position.market_value
-                              ? formatCurrency(position.market_value)
-                              : '-'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right">
-                            <span
-                              className={
-                                (position.unrealized_pnl || 0) > 0
-                                  ? 'text-green-600'
-                                  : (position.unrealized_pnl || 0) < 0
-                                  ? 'text-red-600'
-                                  : 'text-gray-600'
-                              }
-                            >
-                              {position.unrealized_pnl
-                                ? formatCurrency(position.unrealized_pnl)
-                                : '-'}
+                          <td className="px-6 py-3 whitespace-nowrap text-sm text-right">
+                            <span className={`font-semibold ${parseFloat(trade.realized_pnl || '0') >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatCurrency(parseFloat(trade.realized_pnl || '0'))}
                             </span>
                           </td>
                         </tr>
@@ -225,8 +415,8 @@ export default function CalendarPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
           </div>
         )}
       </div>
