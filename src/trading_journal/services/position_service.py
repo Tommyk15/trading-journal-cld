@@ -1,5 +1,6 @@
 """Service for managing positions - syncing from IBKR and tracking open positions."""
 
+import asyncio
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -37,6 +38,14 @@ class PositionService:
         Returns:
             Dictionary with sync statistics
         """
+        from trading_journal.services.ibkr_service import _sync_ibkr_operation
+        from trading_journal.config import get_settings
+
+        settings = get_settings()
+        host = host or settings.ibkr_host
+        port = port or settings.ibkr_port
+        client_id = settings.ibkr_client_id
+
         stats = {
             "fetched": 0,
             "updated": 0,
@@ -44,62 +53,65 @@ class PositionService:
             "errors": 0,
         }
 
-        # Connect to IBKR and fetch positions
-        async with IBKRService() as ibkr:
-            if host and port:
-                await ibkr.connect(host=host, port=port)
+        # Define operation to run in IBKR
+        def fetch_positions(ib):
+            return ib.positions()
 
-            # Get all positions from IBKR
-            ibkr_positions = ibkr.ib.positions()
-            stats["fetched"] = len(ibkr_positions)
+        # Run in executor
+        loop = asyncio.get_event_loop()
+        ibkr_positions = await loop.run_in_executor(
+            None, _sync_ibkr_operation, host, port, client_id, fetch_positions
+        )
 
-            for ibkr_pos in ibkr_positions:
-                try:
-                    contract = ibkr_pos.contract
+        stats["fetched"] = len(ibkr_positions)
 
-                    # Parse position data
-                    position_data = {
-                        "underlying": contract.symbol,
-                        "quantity": int(ibkr_pos.position),
-                        "avg_cost": Decimal(str(ibkr_pos.avgCost)),
-                    }
+        for ibkr_pos in ibkr_positions:
+            try:
+                contract = ibkr_pos.contract
 
-                    # Add option-specific fields
-                    if contract.secType == "OPT":
-                        position_data.update({
-                            "option_type": contract.right,
-                            "strike": Decimal(str(contract.strike)),
-                            "expiration": datetime.strptime(
-                                contract.lastTradeDateOrContractMonth, "%Y%m%d"
-                            ),
-                        })
-                    else:
-                        position_data.update({
-                            "option_type": None,
-                            "strike": None,
-                            "expiration": None,
-                        })
+                # Parse position data
+                position_data = {
+                    "underlying": contract.symbol,
+                    "quantity": int(ibkr_pos.position),
+                    "avg_cost": Decimal(str(ibkr_pos.avgCost)),
+                }
 
-                    # Find or create position
-                    # Note: This is simplified - in production, we'd match to existing trades
-                    existing = await self.find_matching_position(position_data)
+                # Add option-specific fields
+                if contract.secType == "OPT":
+                    position_data.update({
+                        "option_type": contract.right,
+                        "strike": Decimal(str(contract.strike)),
+                        "expiration": datetime.strptime(
+                            contract.lastTradeDateOrContractMonth, "%Y%m%d"
+                        ),
+                    })
+                else:
+                    position_data.update({
+                        "option_type": None,
+                        "strike": None,
+                        "expiration": None,
+                    })
 
-                    if existing:
-                        # Update existing position
-                        existing.quantity = position_data["quantity"]
-                        existing.avg_cost = position_data["avg_cost"]
-                        existing.updated_at = datetime.utcnow()
-                        stats["updated"] += 1
-                    else:
-                        # Create new position (needs to be linked to a trade)
-                        # For now, we'll create a placeholder trade
-                        trade = await self.create_placeholder_trade(position_data)
-                        position = await self.create_position(trade.id, position_data)
-                        stats["created"] += 1
+                # Find or create position
+                # Note: This is simplified - in production, we'd match to existing trades
+                existing = await self.find_matching_position(position_data)
 
-                except Exception as e:
-                    print(f"Error processing position: {e}")
-                    stats["errors"] += 1
+                if existing:
+                    # Update existing position
+                    existing.quantity = position_data["quantity"]
+                    existing.avg_cost = position_data["avg_cost"]
+                    existing.updated_at = datetime.utcnow()
+                    stats["updated"] += 1
+                else:
+                    # Create new position (needs to be linked to a trade)
+                    # For now, we'll create a placeholder trade
+                    trade = await self.create_placeholder_trade(position_data)
+                    position = await self.create_position(trade.id, position_data)
+                    stats["created"] += 1
+
+            except Exception as e:
+                print(f"Error processing position: {e}")
+                stats["errors"] += 1
 
         await self.session.commit()
         return stats

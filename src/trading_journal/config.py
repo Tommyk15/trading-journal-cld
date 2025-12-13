@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     ibkr_port: int = Field(default=7496)
     ibkr_client_id: int = Field(default=1)
 
+    # IBKR Flex Query Configuration
+    ibkr_flex_token: Optional[str] = Field(default=None)
+    ibkr_flex_query_id: str = Field(default="1348073")
+
     # API Settings
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)

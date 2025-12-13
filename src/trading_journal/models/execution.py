@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Integer, Numeric, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading_journal.core.database import Base
@@ -13,14 +13,18 @@ class Execution(Base):
     """Raw execution data from IBKR API."""
 
     __tablename__ = "executions"
+    __table_args__ = {"extend_existing": True}
 
     # Primary key
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    # Foreign key to trade (nullable for executions not yet grouped)
+    trade_id: Mapped[int | None] = mapped_column(ForeignKey("trades.id", ondelete="SET NULL"), index=True)
+
     # IBKR identifiers
     exec_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    order_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    perm_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    perm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     # Timestamps
     execution_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
@@ -40,6 +44,7 @@ class Execution(Base):
 
     # Execution details
     side: Mapped[str] = mapped_column(String(10), nullable=False)  # BOT or SLD
+    open_close_indicator: Mapped[str | None] = mapped_column(String(1))  # O or C
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     commission: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))

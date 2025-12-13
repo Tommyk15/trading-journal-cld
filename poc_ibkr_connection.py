@@ -151,7 +151,7 @@ class IBKRClient(EWrapper, EClient):
         print(f"  Currency: {commissionReport.currency}")
 
 
-def test_ibkr_connection(host='127.0.0.1', port=7496, client_id=1):
+def test_ibkr_connection(host='127.0.0.1', port=7496, client_id=0):
     """
     Test IBKR connection and fetch recent executions
 

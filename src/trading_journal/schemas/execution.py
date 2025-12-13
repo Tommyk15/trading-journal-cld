@@ -23,6 +23,7 @@ class ExecutionBase(BaseModel):
     expiration: Optional[datetime] = Field(None, description="Expiration date")
     multiplier: Optional[int] = Field(None, description="Contract multiplier")
     side: str = Field(..., description="Side (BOT or SLD)", max_length=10)
+    open_close_indicator: Optional[str] = Field(None, description="Open/Close indicator (O or C)", max_length=1)
     quantity: int = Field(..., description="Quantity executed")
     price: Decimal = Field(..., description="Execution price")
     commission: Decimal = Field(default=Decimal("0.00"), description="Commission paid")
@@ -42,6 +43,7 @@ class ExecutionResponse(ExecutionBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Database ID")
+    trade_id: Optional[int] = Field(None, description="Associated trade ID")
     created_at: datetime = Field(..., description="Record creation timestamp")
 
 

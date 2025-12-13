@@ -87,3 +87,65 @@ class TradeProcessResponse(BaseModel):
     trades_created: int = Field(..., description="Number of trades created")
     trades_updated: int = Field(..., description="Number of trades updated")
     message: str = Field(..., description="Result message")
+
+
+class ManualTradeCreateRequest(BaseModel):
+    """Schema for manual trade creation request."""
+
+    execution_ids: list[int] = Field(..., description="List of execution IDs to group")
+    strategy_type: str = Field(..., description="Strategy type", max_length=50)
+    custom_strategy: Optional[str] = Field(None, description="Custom strategy name if 'Custom' selected")
+    notes: Optional[str] = Field(None, description="Trade notes")
+    tags: Optional[str] = Field(None, description="Comma-separated tags", max_length=255)
+    auto_match_closes: bool = Field(True, description="Auto-match closing transactions for opens using FIFO")
+
+
+class TradeExecutionsUpdateRequest(BaseModel):
+    """Schema for adding/removing executions from a trade."""
+
+    add_execution_ids: Optional[list[int]] = Field(None, description="Execution IDs to add")
+    remove_execution_ids: Optional[list[int]] = Field(None, description="Execution IDs to remove")
+
+
+class SuggestedGroupLeg(BaseModel):
+    """Schema for a leg within a suggested trade group."""
+
+    option_type: Optional[str] = Field(None, description="Option type (C or P)")
+    strike: Optional[float] = Field(None, description="Strike price")
+    expiration: Optional[str] = Field(None, description="Expiration date")
+    security_type: str = Field(..., description="Security type (OPT, STK)")
+    total_quantity: int = Field(..., description="Net quantity position")
+    actions: list[str] = Field(..., description="Actions involved (BTO, BTC, STO, STC)")
+
+
+class SuggestedGroup(BaseModel):
+    """Schema for a suggested trade group."""
+
+    execution_ids: list[int] = Field(..., description="Execution IDs in this group")
+    suggested_strategy: str = Field(..., description="Suggested strategy type")
+    underlying: str = Field(..., description="Underlying symbol")
+    total_pnl: float = Field(..., description="Estimated P&L for this group")
+    status: str = Field(..., description="Trade status (OPEN, CLOSED)")
+    legs: list[SuggestedGroupLeg] = Field(default_factory=list, description="Trade legs")
+    open_date: Optional[str] = Field(None, description="Open date")
+    close_date: Optional[str] = Field(None, description="Close date")
+    num_executions: int = Field(..., description="Number of executions")
+
+
+class SuggestGroupingRequest(BaseModel):
+    """Schema for suggested grouping request."""
+
+    execution_ids: Optional[list[int]] = Field(None, description="Specific execution IDs to analyze (optional)")
+
+
+class SuggestGroupingResponse(BaseModel):
+    """Schema for suggested grouping response."""
+
+    groups: list[SuggestedGroup] = Field(..., description="Suggested trade groups")
+    message: str = Field(..., description="Result message")
+
+
+class MergeTradesRequest(BaseModel):
+    """Schema for merge trades request."""
+
+    trade_ids: list[int] = Field(..., description="List of trade IDs to merge (minimum 2)", min_length=2)

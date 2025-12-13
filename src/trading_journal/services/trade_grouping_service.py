@@ -1,15 +1,26 @@
-"""Trade grouping service - converts executions into trades with strategy classification."""
+"""Trade grouping service - converts executions into trades with strategy classification.
+
+This module uses a position state machine approach to correctly identify trade boundaries:
+1. Tracks cumulative position state across all executions
+2. Detects when positions open, close, roll, or adjust
+3. Groups executions into logical trades with proper strategy classification
+"""
 
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
 from trading_journal.models.trade import Trade
+from trading_journal.services.position_state_machine import (
+    PositionStateMachine,
+    TradeGroup,
+    classify_strategy_from_opening,
+)
 
 
 class TradeLedger:
@@ -101,7 +112,7 @@ class TradeLedger:
 
 
 class TradeGroupingService:
-    """Service for grouping executions into trades."""
+    """Service for grouping executions into trades using position state machine."""
 
     def __init__(self, session: AsyncSession):
         """Initialize trade grouping service.
@@ -118,6 +129,11 @@ class TradeGroupingService:
         end_date: Optional[datetime] = None,
     ) -> dict:
         """Process executions into trades with strategy classification.
+
+        Uses a position state machine to correctly identify trade boundaries:
+        - Tracks cumulative position state across all executions
+        - Detects when positions open, close, or change structure
+        - Handles rolls, adjustments, and multi-leg strategies
 
         Args:
             underlying: Optional filter by underlying
@@ -151,40 +167,225 @@ class TradeGroupingService:
         executions = list(result.scalars().all())
         stats["executions_processed"] = len(executions)
 
-        # Group by underlying
+        # Group by underlying first
         by_underlying = defaultdict(list)
         for exec in executions:
             by_underlying[exec.underlying].append(exec)
 
-        # Process each underlying
-        for underlying, execs in by_underlying.items():
-            ledger = TradeLedger(underlying)
-            trades_data = []
-
-            for execution in execs:
-                ledger.add_execution(execution)
-
-                # Check if position is flat (trade complete)
-                if ledger.is_flat():
-                    trade_data = self._create_trade_data(ledger, is_closed=True)
-                    trades_data.append(trade_data)
-
-                    # Reset ledger for next trade
-                    ledger = TradeLedger(underlying)
-
-            # Handle any remaining open position
-            if ledger.executions:
-                trade_data = self._create_trade_data(ledger, is_closed=False)
-                trades_data.append(trade_data)
-
-            # Create trade records
-            for trade_data in trades_data:
-                trade = await self._create_or_update_trade(trade_data)
-                if trade:
-                    stats["trades_created"] += 1
+        # Process each underlying with position state machine
+        for underlying_symbol, execs in by_underlying.items():
+            trades_created = await self._process_underlying_with_state_machine(
+                underlying_symbol, execs
+            )
+            stats["trades_created"] += trades_created
 
         await self.session.commit()
         return stats
+
+    async def _process_underlying_with_state_machine(
+        self, underlying: str, executions: list[Execution]
+    ) -> int:
+        """Process executions for one underlying using position state machine.
+
+        This algorithm:
+        1. Groups near-simultaneous executions (multi-leg orders)
+        2. Tracks cumulative position state across all executions
+        3. Detects trade boundaries when position structure changes
+        4. Handles rolls, adjustments, and partial closes
+
+        Args:
+            underlying: Underlying symbol
+            executions: List of executions for this underlying
+
+        Returns:
+            Number of trades created
+        """
+        if not executions:
+            return 0
+
+        trades_created = 0
+
+        # Sort executions chronologically
+        sorted_execs = sorted(executions, key=lambda e: e.execution_time)
+
+        # Step 1: Group near-simultaneous executions (multi-leg orders)
+        execution_groups = self._group_simultaneous_executions(sorted_execs)
+
+        # Step 2: Process groups with position state machine
+        cumulative_position: dict[str, int] = {}  # leg_key -> net quantity
+        current_trade: Optional[TradeLedger] = None
+        current_trade_legs: set[str] = set()
+
+        for group in execution_groups:
+            # Get legs affected by this execution group
+            group_legs = {self._get_leg_key_from_exec(e) for e in group}
+
+            # Determine what this group does to our position
+            if current_trade is None:
+                # No active trade - this group opens a new trade
+                current_trade = TradeLedger(underlying)
+                for exec in group:
+                    current_trade.add_execution(exec)
+                    self._update_cumulative_position(cumulative_position, exec)
+                current_trade_legs = group_legs
+
+            elif group_legs.issubset(current_trade_legs):
+                # All legs in this group are part of the current trade
+                for exec in group:
+                    current_trade.add_execution(exec)
+                    self._update_cumulative_position(cumulative_position, exec)
+
+                # Check if current trade is now complete (all legs flat)
+                if self._trade_legs_are_flat(current_trade_legs, cumulative_position):
+                    # Trade complete - save it
+                    trade = await self._save_trade_from_ledger(current_trade, is_closed=True)
+                    if trade:
+                        trades_created += 1
+                    current_trade = None
+                    current_trade_legs = set()
+
+            elif group_legs.isdisjoint(current_trade_legs):
+                # Completely different legs - new trade (this is a roll or new position)
+                # Save current trade (might still be open)
+                trade = await self._save_trade_from_ledger(
+                    current_trade,
+                    is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
+                )
+                if trade:
+                    trades_created += 1
+
+                # Start new trade
+                current_trade = TradeLedger(underlying)
+                for exec in group:
+                    current_trade.add_execution(exec)
+                    self._update_cumulative_position(cumulative_position, exec)
+                current_trade_legs = group_legs
+
+            else:
+                # Partial overlap - this is an adjustment or complex scenario
+                # For now, treat as closing current trade and opening new one
+                trade = await self._save_trade_from_ledger(
+                    current_trade,
+                    is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
+                )
+                if trade:
+                    trades_created += 1
+
+                # Start new trade with this group
+                current_trade = TradeLedger(underlying)
+                for exec in group:
+                    current_trade.add_execution(exec)
+                    self._update_cumulative_position(cumulative_position, exec)
+                current_trade_legs = group_legs
+
+        # Handle any remaining open trade
+        if current_trade:
+            trade = await self._save_trade_from_ledger(
+                current_trade,
+                is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
+            )
+            if trade:
+                trades_created += 1
+
+        return trades_created
+
+    def _group_simultaneous_executions(self, executions: list[Execution]) -> list[list[Execution]]:
+        """Group near-simultaneous executions (multi-leg orders).
+
+        Groups executions that occur within a short time window, regardless of order_id.
+        This handles:
+        - Combo orders (same order_id)
+        - Multi-leg strategies placed as separate orders
+        - Spreads executed simultaneously but with different order IDs
+
+        Args:
+            executions: Sorted list of executions
+
+        Returns:
+            List of execution groups
+        """
+        if not executions:
+            return []
+
+        groups = []
+        current_group = []
+        group_start_time = None
+
+        # Very tight window - executions within 2 seconds are likely part of same strategy
+        TIME_WINDOW = timedelta(seconds=2)
+
+        for exec in executions:
+            if not current_group:
+                # Start new group
+                current_group = [exec]
+                group_start_time = exec.execution_time
+            else:
+                # Check if this execution is close enough to the group start
+                time_diff = exec.execution_time - group_start_time
+
+                if time_diff <= TIME_WINDOW:
+                    # Within time window - add to current group
+                    current_group.append(exec)
+                else:
+                    # Too far apart - finalize current group and start new one
+                    groups.append(current_group)
+                    current_group = [exec]
+                    group_start_time = exec.execution_time
+
+        # Add final group
+        if current_group:
+            groups.append(current_group)
+
+        return groups
+
+    def _get_leg_key_from_exec(self, execution: Execution) -> str:
+        """Get leg key from execution (same as TradeLedger.get_leg_key)."""
+        if execution.security_type == "OPT":
+            expiry = execution.expiration.strftime("%Y%m%d") if execution.expiration else ""
+            return f"{expiry}_{execution.strike}_{execution.option_type}"
+        return "STK"
+
+    def _update_cumulative_position(self, position: dict[str, int], execution: Execution) -> None:
+        """Update cumulative position with an execution.
+
+        Args:
+            position: Cumulative position dict (leg_key -> quantity)
+            execution: Execution to apply
+        """
+        leg_key = self._get_leg_key_from_exec(execution)
+        delta = execution.quantity if execution.side == "BOT" else -execution.quantity
+        position[leg_key] = position.get(leg_key, 0) + delta
+
+    def _trade_legs_are_flat(self, trade_legs: set[str], cumulative_position: dict[str, int]) -> bool:
+        """Check if all legs of a trade are flat (zero quantity).
+
+        Args:
+            trade_legs: Set of leg keys in the trade
+            cumulative_position: Current cumulative position
+
+        Returns:
+            True if all trade legs are at zero quantity
+        """
+        return all(cumulative_position.get(leg, 0) == 0 for leg in trade_legs)
+
+    async def _save_trade_from_ledger(self, ledger: TradeLedger, is_closed: bool) -> Optional[Trade]:
+        """Save a trade from a ledger.
+
+        Args:
+            ledger: Trade ledger with executions
+            is_closed: Whether the trade is closed
+
+        Returns:
+            Created Trade object or None
+        """
+        trade_data = self._create_trade_data(ledger, is_closed=is_closed)
+        trade_executions = trade_data.pop("executions", [])
+        trade = await self._create_or_update_trade(trade_data)
+        if trade:
+            # Assign trade_id to all executions
+            for execution in trade_executions:
+                execution.trade_id = trade.id
+        return trade
 
     def _create_trade_data(self, ledger: TradeLedger, is_closed: bool) -> dict:
         """Create trade data dictionary from ledger.
@@ -204,14 +405,36 @@ class TradeGroupingService:
         closed_at = max(e.execution_time for e in ledger.executions) if is_closed else None
 
         # Calculate costs
-        opening_cost = sum(
-            abs(e.net_amount) for e in ledger.executions
-            if e.side == "BOT"
-        )
-        closing_proceeds = sum(
-            abs(e.net_amount) for e in ledger.executions
-            if e.side == "SLD"
-        ) if is_closed else Decimal("0.00")
+        # For multi-leg strategies, we need to distinguish between:
+        # - Opening executions (initial position entry)
+        # - Closing executions (position exit)
+
+        if is_closed:
+            # Trade is closed - all executions contributed to opening or closing
+            opening_cost = sum(
+                abs(e.net_amount) for e in ledger.executions
+                if e.side == "BOT"
+            )
+            closing_proceeds = sum(
+                abs(e.net_amount) for e in ledger.executions
+                if e.side == "SLD"
+            )
+        else:
+            # Trade is still open - calculate net opening cost
+            # For spreads: BOT (long leg) - SLD (short leg credit)
+            # For single legs: just the BOT cost
+            bot_cost = sum(
+                abs(e.net_amount) for e in ledger.executions
+                if e.side == "BOT"
+            )
+            sld_credit = sum(
+                abs(e.net_amount) for e in ledger.executions
+                if e.side == "SLD"
+            )
+
+            # Net opening cost = cost paid - credit received
+            opening_cost = bot_cost - sld_credit
+            closing_proceeds = Decimal("0.00")
 
         total_commission = sum(e.commission for e in ledger.executions)
 
@@ -222,13 +445,14 @@ class TradeGroupingService:
             "opened_at": opened_at,
             "closed_at": closed_at,
             "realized_pnl": ledger.get_pnl() if is_closed else Decimal("0.00"),
-            "unrealized_pnl": ledger.get_pnl() if not is_closed else Decimal("0.00"),
-            "total_pnl": ledger.get_pnl(),
+            "unrealized_pnl": Decimal("0.00"),  # Requires live market data to calculate
+            "total_pnl": ledger.get_pnl() if is_closed else Decimal("0.00"),
             "opening_cost": opening_cost,
             "closing_proceeds": closing_proceeds,
             "total_commission": total_commission,
             "num_legs": len(legs),
             "num_executions": len(ledger.executions),
+            "executions": ledger.executions,  # Include executions for trade_id assignment
         }
 
     def _classify_strategy(self, legs: dict) -> str:
@@ -247,6 +471,25 @@ class TradeGroupingService:
         open_legs = {k: v for k, v in legs.items() if v["quantity"] != 0}
 
         if num_legs == 1:
+            leg_key = list(legs.keys())[0]
+            leg_data = list(legs.values())[0]
+            qty = leg_data["quantity"]
+
+            # Check if it's stock or option
+            if leg_key == "STK":
+                return "Long Stock" if qty > 0 else "Short Stock"
+
+            # Parse option leg key: "YYYYMMDD_strike_type"
+            parts = leg_key.split("_")
+            if len(parts) == 3:
+                option_type = parts[2]  # "C" or "P"
+                is_long = qty > 0
+
+                if option_type == "C":
+                    return "Long Call" if is_long else "Short Call"
+                elif option_type == "P":
+                    return "Long Put" if is_long else "Short Put"
+
             return "Single"
 
         if num_legs == 2:
@@ -260,11 +503,45 @@ class TradeGroupingService:
                 parts2 = leg2_key.split("_")
 
                 if len(parts1) == 3 and len(parts2) == 3:
-                    exp1, strike1, right1 = parts1
-                    exp2, strike2, right2 = parts2
+                    exp1, strike1_str, right1 = parts1
+                    exp2, strike2_str, right2 = parts2
 
                     # Same expiry and type = vertical spread
                     if exp1 == exp2 and right1 == right2:
+                        try:
+                            strike1 = float(strike1_str)
+                            strike2 = float(strike2_str)
+                            qty1 = leg1_data["quantity"]
+                            qty2 = leg2_data["quantity"]
+
+                            # Sort by strike
+                            if strike1 > strike2:
+                                strike1, strike2 = strike2, strike1
+                                qty1, qty2 = qty2, qty1
+
+                            # Now strike1 is lower, strike2 is higher
+                            # qty > 0 = long, qty < 0 = short
+                            lower_is_long = qty1 > 0
+                            upper_is_long = qty2 > 0
+
+                            if right1 == "C":
+                                # Call spreads
+                                if lower_is_long and not upper_is_long:
+                                    return "Bull Call Spread"
+                                elif not lower_is_long and upper_is_long:
+                                    return "Bear Call Spread"
+                            else:
+                                # Put spreads
+                                # Bull Put Spread: Long lower put + Short higher put (credit)
+                                # Bear Put Spread: Short lower put + Long higher put (debit)
+                                if lower_is_long and not upper_is_long:
+                                    return "Bull Put Spread"
+                                elif not lower_is_long and upper_is_long:
+                                    return "Bear Put Spread"
+                        except (ValueError, KeyError):
+                            pass
+
+                        # Fallback if can't determine direction
                         if right1 == "C":
                             return "Vertical Call Spread"
                         else:
@@ -311,4 +588,158 @@ class TradeGroupingService:
         trade = Trade(**trade_data)
         self.session.add(trade)
         await self.session.flush()
+        return trade
+
+    async def reprocess_all_executions(self) -> dict:
+        """Reprocess all executions using the improved state machine algorithm.
+
+        This method:
+        1. Deletes all existing trades
+        2. Clears trade_id from all executions
+        3. Reprocesses all executions using the position state machine
+        4. Links rolls within the same day
+
+        Returns:
+            Dict with processing statistics
+        """
+        stats = {
+            "trades_deleted": 0,
+            "executions_processed": 0,
+            "trades_created": 0,
+            "rolls_detected": 0,
+        }
+
+        # Step 1: Delete all existing trades
+        delete_stmt = delete(Trade)
+        await self.session.execute(delete_stmt)
+
+        # Step 2: Clear trade_id from all executions
+        stmt = select(Execution)
+        result = await self.session.execute(stmt)
+        executions = list(result.scalars().all())
+
+        for exec in executions:
+            exec.trade_id = None
+
+        await self.session.flush()
+        stats["executions_processed"] = len(executions)
+
+        # Step 3: Group by underlying
+        by_underlying = defaultdict(list)
+        for exec in executions:
+            by_underlying[exec.underlying].append(exec)
+
+        # Step 4: Process each underlying with state machine
+        all_trades: list[Trade] = []
+        roll_chain_counter = 1
+
+        for underlying, execs in by_underlying.items():
+            # Use the new position state machine
+            state_machine = PositionStateMachine(underlying)
+            trade_groups = state_machine.process_executions(execs)
+
+            # Convert trade groups to Trade models
+            prev_trade: Optional[Trade] = None
+            current_chain_id: Optional[int] = None
+
+            for group in trade_groups:
+                trade = await self._create_trade_from_group(group)
+                if trade:
+                    all_trades.append(trade)
+                    stats["trades_created"] += 1
+
+                    # Handle roll linking
+                    if group.roll_type == "ROLL" and prev_trade:
+                        trade.is_roll = True
+                        trade.rolled_from_trade_id = prev_trade.id
+                        prev_trade.rolled_to_trade_id = trade.id
+
+                        # Use same chain ID or create new one
+                        if current_chain_id is None:
+                            current_chain_id = roll_chain_counter
+                            roll_chain_counter += 1
+                            prev_trade.roll_chain_id = current_chain_id
+
+                        trade.roll_chain_id = current_chain_id
+                        stats["rolls_detected"] += 1
+                    else:
+                        # Reset chain for non-rolls
+                        current_chain_id = None
+
+                    prev_trade = trade
+
+        await self.session.commit()
+        return stats
+
+    async def _create_trade_from_group(self, group: TradeGroup) -> Optional[Trade]:
+        """Create a Trade model from a TradeGroup.
+
+        Args:
+            group: TradeGroup from state machine
+
+        Returns:
+            Created Trade model
+        """
+        if not group.executions:
+            return None
+
+        # Calculate metrics
+        executions = group.executions
+
+        # Timestamps
+        opened_at = min(e.execution_time for e in executions)
+        closed_at = max(e.execution_time for e in executions) if group.status == "CLOSED" else None
+
+        # Classify strategy based on opening position
+        strategy_type = classify_strategy_from_opening(group.opening_position)
+
+        # Calculate costs and P&L
+        total_commission = sum(e.commission for e in executions)
+
+        if group.status == "CLOSED":
+            opening_cost = sum(abs(e.net_amount) for e in executions if e.side == "BOT")
+            closing_proceeds = sum(abs(e.net_amount) for e in executions if e.side == "SLD")
+            realized_pnl = closing_proceeds - opening_cost - total_commission
+        else:
+            bot_cost = sum(abs(e.net_amount) for e in executions if e.side == "BOT")
+            sld_credit = sum(abs(e.net_amount) for e in executions if e.side == "SLD")
+            opening_cost = bot_cost - sld_credit
+            closing_proceeds = Decimal("0.00")
+            realized_pnl = Decimal("0.00")
+
+        # Count unique legs
+        leg_keys = set()
+        for exec in executions:
+            if exec.security_type == "OPT":
+                expiry = exec.expiration.strftime("%Y%m%d") if exec.expiration else ""
+                leg_key = f"{expiry}_{exec.strike}_{exec.option_type}"
+            else:
+                leg_key = "STK"
+            leg_keys.add(leg_key)
+
+        # Create trade
+        trade = Trade(
+            underlying=group.underlying,
+            strategy_type=strategy_type,
+            status=group.status,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            realized_pnl=realized_pnl,
+            unrealized_pnl=Decimal("0.00"),
+            total_pnl=realized_pnl,
+            opening_cost=opening_cost,
+            closing_proceeds=closing_proceeds,
+            total_commission=total_commission,
+            num_legs=len(leg_keys),
+            num_executions=len(executions),
+            is_roll=group.roll_type == "ROLL",
+        )
+
+        self.session.add(trade)
+        await self.session.flush()
+
+        # Link executions to trade
+        for exec in executions:
+            exec.trade_id = trade.id
+
         return trade

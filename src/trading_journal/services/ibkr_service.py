@@ -12,6 +12,38 @@ from trading_journal.config import get_settings
 settings = get_settings()
 
 
+def _sync_ibkr_operation(host: str, port: int, client_id: int, operation_func):
+    """
+    Run an IBKR operation with its own event loop.
+
+    This function creates a new event loop, connects to IBKR,
+    runs the operation, disconnects, and cleans up.
+    """
+    loop = None
+    ib = None
+    try:
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Create IB instance and connect
+        ib = IB()
+        loop.run_until_complete(ib.connectAsync(host, port, clientId=client_id))
+
+        # Run the operation
+        result = operation_func(ib)
+
+        return result
+    except Exception as e:
+        raise ConnectionError(f"Failed to connect to IBKR: {e}")
+    finally:
+        # Cleanup
+        if ib and ib.isConnected():
+            ib.disconnect()
+        if loop:
+            loop.close()
+
+
 class IBKRService:
     """Service for interacting with Interactive Brokers API."""
 
@@ -43,14 +75,16 @@ class IBKRService:
         port = port or settings.ibkr_port
         client_id = client_id or settings.ibkr_client_id
 
-        try:
-            # ib-insync uses asyncio internally
-            await self.ib.connectAsync(host, port, clientId=client_id)
+        def connect_op(ib):
+            self.ib = ib
             self.connected = True
             return True
-        except Exception as e:
-            self.connected = False
-            raise ConnectionError(f"Failed to connect to IBKR: {e}")
+
+        # Run in executor with its own event loop
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, _sync_ibkr_operation, host, port, client_id, connect_op
+        )
 
     async def disconnect(self) -> None:
         """Disconnect from IBKR."""

@@ -13,6 +13,7 @@ class Trade(Base):
     """Grouped trade - result of trade grouping algorithm."""
 
     __tablename__ = "trades"
+    __table_args__ = {"extend_existing": True}
 
     # Primary key
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -57,6 +58,8 @@ class Trade(Base):
     is_roll: Mapped[bool] = mapped_column(default=False, nullable=False)
     rolled_from_trade_id: Mapped[int | None] = mapped_column(Integer)
     rolled_to_trade_id: Mapped[int | None] = mapped_column(Integer)
+    roll_chain_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # roll_chain_id groups all trades in a roll sequence (shared ID)
 
     def __repr__(self) -> str:
         """String representation."""
