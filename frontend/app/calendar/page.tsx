@@ -13,6 +13,15 @@ interface Trade {
   opened_at: string;
   closed_at: string | null;
   realized_pnl: string | null;
+  num_legs: number;
+}
+
+interface Execution {
+  id: number;
+  strike: number | null;
+  expiration: string | null;
+  quantity: number;
+  option_type: string | null;
 }
 
 interface DayData {
@@ -21,6 +30,8 @@ interface DayData {
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;
+  opened: number;
+  closed: number;
   trades: Trade[];
 }
 
@@ -35,13 +46,31 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
+  const [tradeExecutions, setTradeExecutions] = useState<Record<number, Execution[]>>({});
+  const [loadingExecutions, setLoadingExecutions] = useState(false);
 
   async function fetchTrades() {
     try {
       setLoading(true);
-      const data: any = await api.trades.list({ limit: 10000 });
-      const fetchedTrades = data.trades || [];
-      setTrades(fetchedTrades);
+      // Fetch all trades with pagination (API has limit restrictions)
+      let allTrades: Trade[] = [];
+      let offset = 0;
+      const batchSize = 100;
+      let hasMore = true;
+
+      while (hasMore) {
+        const data: any = await api.trades.list({ limit: batchSize, offset });
+        const batch = data.trades || [];
+        allTrades = [...allTrades, ...batch];
+
+        if (batch.length < batchSize || allTrades.length >= (data.total || 0)) {
+          hasMore = false;
+        } else {
+          offset += batchSize;
+        }
+      }
+
+      setTrades(allTrades);
     } catch (error) {
       console.error('Error fetching trades:', error);
       setTrades([]);
@@ -53,6 +82,36 @@ export default function CalendarPage() {
   useEffect(() => {
     fetchTrades();
   }, []);
+
+  // Fetch executions for trades when a day is selected
+  async function fetchExecutionsForTrades(dayTrades: Trade[]) {
+    setLoadingExecutions(true);
+    const newExecutions: Record<number, Execution[]> = { ...tradeExecutions };
+
+    await Promise.all(
+      dayTrades.map(async (trade) => {
+        if (!newExecutions[trade.id]) {
+          try {
+            const response = await fetch(`http://localhost:8000/api/v1/trades/${trade.id}/executions`);
+            const data = await response.json();
+            newExecutions[trade.id] = data.executions || [];
+          } catch (error) {
+            console.error(`Error fetching executions for trade ${trade.id}:`, error);
+            newExecutions[trade.id] = [];
+          }
+        }
+      })
+    );
+
+    setTradeExecutions(newExecutions);
+    setLoadingExecutions(false);
+  }
+
+  // Handle day click
+  function handleDayClick(dayData: DayData) {
+    setSelectedDay(dayData);
+    fetchExecutionsForTrades(dayData.trades);
+  }
 
   // Format date to YYYY-MM-DD in local timezone
   function formatDateLocal(date: Date): string {
@@ -107,26 +166,41 @@ export default function CalendarPage() {
     let pnl = 0;
     let winningTrades = 0;
     let losingTrades = 0;
+    let opened = 0;
+    let closed = 0;
     const dayTrades: Trade[] = [];
 
     trades.forEach(trade => {
+      const openedDate = trade.opened_at ? trade.opened_at.split('T')[0] : null;
       const closedDate = trade.closed_at ? trade.closed_at.split('T')[0] : null;
 
+      if (openedDate === dateStr) {
+        opened++;
+        if (!dayTrades.includes(trade)) {
+          dayTrades.push(trade);
+        }
+      }
+
       if (closedDate === dateStr) {
+        closed++;
         const tradePnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : 0;
         pnl += tradePnl;
         if (tradePnl > 0) winningTrades++;
         else if (tradePnl < 0) losingTrades++;
-        dayTrades.push(trade);
+        if (!dayTrades.includes(trade)) {
+          dayTrades.push(trade);
+        }
       }
     });
 
     return {
       date,
       pnl,
-      totalTrades: dayTrades.length,
+      totalTrades: closed, // Total trades closed (for P&L calculation)
       winningTrades,
       losingTrades,
+      opened,
+      closed,
       trades: dayTrades
     };
   }
@@ -186,10 +260,15 @@ export default function CalendarPage() {
   // Get background color class based on P&L
   function getDayBgClass(dayData: DayData, isInMonth: boolean): string {
     if (!isInMonth) return 'bg-gray-50';
-    if (dayData.totalTrades === 0) return 'bg-white';
-    if (dayData.pnl > 0) return 'bg-green-100';
-    if (dayData.pnl < 0) return 'bg-red-100';
-    return 'bg-gray-100';
+    if (dayData.opened === 0 && dayData.closed === 0) return 'bg-white';
+    // Color based on closed trade P&L
+    if (dayData.closed > 0) {
+      if (dayData.pnl > 0) return 'bg-green-100';
+      if (dayData.pnl < 0) return 'bg-red-100';
+      return 'bg-gray-100'; // break even
+    }
+    // Only opened trades - light blue
+    return 'bg-blue-50';
   }
 
   const days = getDaysInMonth(currentMonth);
@@ -278,15 +357,15 @@ export default function CalendarPage() {
                 const dayData = getDayData(date);
                 const inMonth = isCurrentMonth(date);
                 const today = isToday(date);
-                const hasActivity = dayData.totalTrades > 0;
-                const winRate = dayData.totalTrades > 0
-                  ? ((dayData.winningTrades / dayData.totalTrades) * 100).toFixed(dayData.totalTrades > 2 ? 2 : 1)
+                const hasActivity = dayData.opened > 0 || dayData.closed > 0;
+                const winRate = dayData.closed > 0
+                  ? ((dayData.winningTrades / dayData.closed) * 100).toFixed(dayData.closed > 2 ? 2 : 1)
                   : 0;
 
                 return (
                   <div
                     key={idx}
-                    onClick={() => hasActivity && inMonth ? setSelectedDay(dayData) : null}
+                    onClick={() => hasActivity && inMonth ? handleDayClick(dayData) : null}
                     className={`
                       min-h-[110px] p-2 border-b border-r border-gray-100 relative
                       ${getDayBgClass(dayData, inMonth)}
@@ -309,15 +388,31 @@ export default function CalendarPage() {
                     {/* Day Stats */}
                     {inMonth && hasActivity && (
                       <div className="mt-1 text-center">
-                        <div className={`text-lg font-bold ${dayData.pnl >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
-                          {formatK(dayData.pnl)}
+                        {/* P&L - only show if closed trades */}
+                        {dayData.closed > 0 && (
+                          <div className={`text-lg font-bold ${dayData.pnl >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                            {formatK(dayData.pnl)}
+                          </div>
+                        )}
+                        {/* Opened/Closed counts */}
+                        <div className="flex justify-center gap-1 mt-0.5">
+                          {dayData.opened > 0 && (
+                            <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
+                              +{dayData.opened}
+                            </span>
+                          )}
+                          {dayData.closed > 0 && (
+                            <span className="text-xs px-1.5 py-0.5 bg-gray-200 text-gray-700 rounded">
+                              -{dayData.closed}
+                            </span>
+                          )}
                         </div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {dayData.totalTrades} trade{dayData.totalTrades !== 1 ? 's' : ''}
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          {winRate}%
-                        </div>
+                        {/* Win rate - only show if closed trades */}
+                        {dayData.closed > 0 && (
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            {winRate}%
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -364,7 +459,7 @@ export default function CalendarPage() {
               </div>
 
               {/* Day Summary */}
-              <div className="px-6 py-4 grid grid-cols-4 gap-4 border-b border-gray-200">
+              <div className="px-6 py-4 grid grid-cols-5 gap-4 border-b border-gray-200">
                 <div>
                   <p className="text-sm text-gray-500">P&L</p>
                   <p className={`text-xl font-bold ${selectedDay.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -372,8 +467,12 @@ export default function CalendarPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Trades</p>
-                  <p className="text-xl font-bold text-gray-900">{selectedDay.totalTrades}</p>
+                  <p className="text-sm text-gray-500">Opened</p>
+                  <p className="text-xl font-bold text-blue-600">{selectedDay.opened}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Closed</p>
+                  <p className="text-xl font-bold text-gray-900">{selectedDay.closed}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Winners</p>
@@ -388,32 +487,87 @@ export default function CalendarPage() {
               {/* Trades List */}
               {selectedDay.trades.length > 0 && (
                 <div className="overflow-auto max-h-[400px]">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strategy</th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">P&L</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {selectedDay.trades.map(trade => (
-                        <tr key={trade.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {trade.underlying}
-                          </td>
-                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                            {trade.strategy_type}
-                          </td>
-                          <td className="px-6 py-3 whitespace-nowrap text-sm text-right">
-                            <span className={`font-semibold ${parseFloat(trade.realized_pnl || '0') >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {formatCurrency(parseFloat(trade.realized_pnl || '0'))}
-                            </span>
-                          </td>
+                  {loadingExecutions ? (
+                    <div className="p-6 text-center text-gray-500">Loading trade details...</div>
+                  ) : (
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strategy</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strike</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Exp</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">P&L</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {selectedDay.trades.map(trade => {
+                          const dateStr = formatDateLocal(selectedDay.date);
+                          const wasOpened = trade.opened_at?.split('T')[0] === dateStr;
+                          const wasClosed = trade.closed_at?.split('T')[0] === dateStr;
+                          const executions = tradeExecutions[trade.id] || [];
+
+                          // Get unique strikes and expirations
+                          const strikes = [...new Set(executions.map(e => e.strike).filter(s => s))].sort((a, b) => (a || 0) - (b || 0));
+                          const expirations = [...new Set(executions.map(e => e.expiration).filter(e => e))];
+                          const totalQty = executions.reduce((sum, e) => {
+                            // Only count opening transactions
+                            return sum + e.quantity;
+                          }, 0) / 2 || trade.num_legs; // Divide by 2 to account for open+close, fallback to num_legs
+
+                          // Format expiration date
+                          const expDisplay = expirations.length > 0
+                            ? new Date(expirations[0]!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            : '-';
+
+                          return (
+                            <tr key={trade.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                                {trade.underlying}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                                {trade.strategy_type}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                                {Math.round(totalQty) || '-'}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {strikes.length > 0 ? strikes.join('/') : '-'}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {expDisplay}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
+                                <div className="flex justify-center gap-1">
+                                  {wasOpened && (
+                                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                                      Opened
+                                    </span>
+                                  )}
+                                  {wasClosed && (
+                                    <span className="px-2 py-0.5 bg-gray-200 text-gray-700 rounded text-xs">
+                                      Closed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right">
+                                {wasClosed ? (
+                                  <span className={`font-semibold ${parseFloat(trade.realized_pnl || '0') >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {formatCurrency(parseFloat(trade.realized_pnl || '0'))}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               )}
             </div>
