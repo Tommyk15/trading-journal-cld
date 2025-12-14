@@ -209,6 +209,8 @@ class PerformanceMetricsService:
         self,
         underlying: str | None = None,
         strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         risk_free_rate: float = 0.02,  # 2% annual risk-free rate
     ) -> dict:
         """Calculate Sharpe ratio and related risk metrics.
@@ -216,6 +218,8 @@ class PerformanceMetricsService:
         Args:
             underlying: Optional filter by underlying
             strategy_type: Optional filter by strategy
+            start_date: Optional start date filter
+            end_date: Optional end date filter
             risk_free_rate: Annual risk-free rate (default 2%)
 
         Returns:
@@ -225,6 +229,8 @@ class PerformanceMetricsService:
         daily_data = await self.get_daily_pnl(
             underlying=underlying,
             strategy_type=strategy_type,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         if not daily_data or len(daily_data) < 2:
@@ -360,4 +366,243 @@ class PerformanceMetricsService:
             "data_points": len(time_series),
             "first_trade_date": time_series[0]["timestamp"] if time_series else None,
             "last_trade_date": time_series[-1]["timestamp"] if time_series else None,
+        }
+
+    async def get_sortino_ratio(
+        self,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        risk_free_rate: float = 0.02,
+    ) -> dict:
+        """Calculate Sortino ratio using downside deviation.
+
+        The Sortino ratio only considers downside volatility, making it
+        more appropriate for measuring risk-adjusted returns when we care
+        more about losses than overall volatility.
+
+        Args:
+            underlying: Optional filter by underlying
+            strategy_type: Optional filter by strategy
+            start_date: Optional start date filter
+            end_date: Optional end date filter
+            risk_free_rate: Annual risk-free rate (default 2%)
+
+        Returns:
+            Dictionary with Sortino ratio and related metrics
+        """
+        import statistics
+
+        # Get daily P&L data
+        daily_data = await self.get_daily_pnl(
+            underlying=underlying,
+            strategy_type=strategy_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if not daily_data or len(daily_data) < 2:
+            return {
+                "sortino_ratio": None,
+                "average_daily_return": Decimal("0.00"),
+                "downside_deviation": Decimal("0.00"),
+                "total_days": 0,
+            }
+
+        # Calculate daily returns
+        daily_returns = [float(day["daily_pnl"]) for day in daily_data]
+
+        # Calculate average return
+        avg_daily_return = statistics.mean(daily_returns)
+
+        # Calculate downside deviation (only negative returns)
+        negative_returns = [r for r in daily_returns if r < 0]
+
+        if len(negative_returns) < 2:
+            downside_deviation = 0.0
+        else:
+            # Downside deviation: std dev of negative returns
+            downside_deviation = statistics.stdev(negative_returns)
+
+        # Annualize
+        annualized_return = avg_daily_return * 252
+        annualized_downside_dev = downside_deviation * (252 ** 0.5)
+
+        # Calculate Sortino ratio
+        sortino_ratio = None
+        if annualized_downside_dev > 0:
+            sortino_ratio = (annualized_return - risk_free_rate) / annualized_downside_dev
+
+        return {
+            "sortino_ratio": sortino_ratio,
+            "average_daily_return": Decimal(str(avg_daily_return)),
+            "downside_deviation": Decimal(str(downside_deviation)),
+            "annualized_downside_deviation": Decimal(str(annualized_downside_dev)),
+            "total_days": len(daily_data),
+        }
+
+    async def get_streak_info(
+        self,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> dict:
+        """Calculate win/loss streak information.
+
+        Args:
+            underlying: Optional filter by underlying
+            strategy_type: Optional filter by strategy
+            start_date: Optional start date filter
+            end_date: Optional end date filter
+
+        Returns:
+            Dictionary with streak information
+        """
+        stmt = (
+            select(Trade)
+            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .order_by(Trade.closed_at)
+        )
+
+        if underlying:
+            stmt = stmt.where(Trade.underlying == underlying)
+        if strategy_type:
+            stmt = stmt.where(Trade.strategy_type == strategy_type)
+        if start_date:
+            stmt = stmt.where(Trade.closed_at >= start_date)
+        if end_date:
+            stmt = stmt.where(Trade.closed_at <= end_date)
+
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        if not trades:
+            return {
+                "max_consecutive_wins": 0,
+                "max_consecutive_losses": 0,
+                "current_streak": 0,
+                "current_streak_type": "none",
+            }
+
+        max_wins = 0
+        max_losses = 0
+        current_streak = 0
+        current_type = "none"
+
+        temp_wins = 0
+        temp_losses = 0
+
+        for trade in trades:
+            is_win = trade.realized_pnl > 0
+            is_loss = trade.realized_pnl < 0
+
+            if is_win:
+                temp_wins += 1
+                temp_losses = 0
+                max_wins = max(max_wins, temp_wins)
+            elif is_loss:
+                temp_losses += 1
+                temp_wins = 0
+                max_losses = max(max_losses, temp_losses)
+            else:
+                # Breakeven - resets streaks
+                temp_wins = 0
+                temp_losses = 0
+
+        # Determine current streak from last trade
+        if trades:
+            last_trade = trades[-1]
+            if last_trade.realized_pnl > 0:
+                current_type = "win"
+                current_streak = temp_wins
+            elif last_trade.realized_pnl < 0:
+                current_type = "loss"
+                current_streak = temp_losses
+            else:
+                current_type = "none"
+                current_streak = 0
+
+        return {
+            "max_consecutive_wins": max_wins,
+            "max_consecutive_losses": max_losses,
+            "current_streak": current_streak,
+            "current_streak_type": current_type,
+        }
+
+    async def get_expectancy(
+        self,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> dict:
+        """Calculate trade expectancy (expected value per trade).
+
+        Expectancy = (Win% * Avg Win) - (Loss% * Avg Loss)
+
+        Args:
+            underlying: Optional filter by underlying
+            strategy_type: Optional filter by strategy
+            start_date: Optional start date filter
+            end_date: Optional end date filter
+
+        Returns:
+            Dictionary with expectancy and related metrics
+        """
+        stmt = (
+            select(Trade)
+            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .order_by(Trade.closed_at)
+        )
+
+        if underlying:
+            stmt = stmt.where(Trade.underlying == underlying)
+        if strategy_type:
+            stmt = stmt.where(Trade.strategy_type == strategy_type)
+        if start_date:
+            stmt = stmt.where(Trade.closed_at >= start_date)
+        if end_date:
+            stmt = stmt.where(Trade.closed_at <= end_date)
+
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        if not trades:
+            return {
+                "expectancy": Decimal("0.00"),
+                "win_rate": 0.0,
+                "avg_win": Decimal("0.00"),
+                "avg_loss": Decimal("0.00"),
+                "total_trades": 0,
+            }
+
+        winners = [t for t in trades if t.realized_pnl > 0]
+        losers = [t for t in trades if t.realized_pnl < 0]
+
+        total_trades = len(trades)
+        win_rate = len(winners) / total_trades if total_trades > 0 else 0.0
+        loss_rate = len(losers) / total_trades if total_trades > 0 else 0.0
+
+        avg_win = (
+            sum(t.realized_pnl for t in winners) / len(winners)
+            if winners
+            else Decimal("0.00")
+        )
+        avg_loss = (
+            abs(sum(t.realized_pnl for t in losers) / len(losers))
+            if losers
+            else Decimal("0.00")
+        )
+
+        # Expectancy = (Win% * Avg Win) - (Loss% * Avg Loss)
+        expectancy = Decimal(str(win_rate)) * avg_win - Decimal(str(loss_rate)) * avg_loss
+
+        return {
+            "expectancy": expectancy,
+            "win_rate": win_rate * 100,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "total_trades": total_trades,
         }

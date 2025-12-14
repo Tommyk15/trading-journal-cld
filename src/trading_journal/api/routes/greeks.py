@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.core.database import get_db
+from trading_journal.schemas.dashboard import PortfolioGreeksSummary
 from trading_journal.schemas.greeks import (
     GreeksFetchRequest,
     GreeksFetchResponse,
@@ -116,3 +117,30 @@ async def get_greeks_history(
         total=len(greeks_list),
         position_id=position_id,
     )
+
+
+@router.get("/portfolio-summary", response_model=PortfolioGreeksSummary)
+async def get_portfolio_greeks_summary(
+    session: AsyncSession = Depends(get_db),
+):
+    """Get aggregated Greeks across all open option positions.
+
+    Sums up delta, gamma, theta, and vega across all positions,
+    weighted by position quantity and contract multiplier (100).
+
+    This provides a portfolio-level view of Greeks exposure:
+    - Delta: Directional exposure to underlying price movement
+    - Gamma: Rate of delta change
+    - Theta: Daily time decay
+    - Vega: Sensitivity to implied volatility changes
+
+    Args:
+        session: Database session
+
+    Returns:
+        Aggregated portfolio Greeks
+    """
+    service = GreeksService(session)
+    summary = await service.get_portfolio_greeks_summary()
+
+    return PortfolioGreeksSummary(**summary)

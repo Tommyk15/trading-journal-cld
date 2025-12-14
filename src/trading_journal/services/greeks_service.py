@@ -219,3 +219,63 @@ class GreeksService:
         stmt = select(Position).where(Position.id == position_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_portfolio_greeks_summary(self) -> dict:
+        """Get aggregated Greeks across all open option positions.
+
+        Sums up delta, gamma, theta, and vega across all positions,
+        weighted by position quantity and contract multiplier.
+
+        Returns:
+            Dictionary with aggregated Greeks
+        """
+        from decimal import Decimal
+
+        # Get all open option positions
+        stmt = (
+            select(Position)
+            .where(Position.option_type.isnot(None))
+            .order_by(Position.underlying)
+        )
+        result = await self.session.execute(stmt)
+        positions = list(result.scalars().all())
+
+        total_delta = Decimal("0.00")
+        total_gamma = Decimal("0.00")
+        total_theta = Decimal("0.00")
+        total_vega = Decimal("0.00")
+        position_count = 0
+        latest_timestamp = None
+
+        for position in positions:
+            # Get latest Greeks for this position
+            greeks = await self.get_latest_greeks(position.id)
+
+            if greeks:
+                position_count += 1
+                quantity = position.quantity
+                # Contract multiplier (typically 100 for equity options)
+                multiplier = 100
+
+                # Aggregate Greeks (multiply by quantity for position-level Greeks)
+                if greeks.delta is not None:
+                    total_delta += greeks.delta * quantity * multiplier
+                if greeks.gamma is not None:
+                    total_gamma += greeks.gamma * quantity * multiplier
+                if greeks.theta is not None:
+                    total_theta += greeks.theta * quantity * multiplier
+                if greeks.vega is not None:
+                    total_vega += greeks.vega * quantity * multiplier
+
+                # Track most recent Greeks timestamp
+                if latest_timestamp is None or greeks.timestamp > latest_timestamp:
+                    latest_timestamp = greeks.timestamp
+
+        return {
+            "total_delta": total_delta,
+            "total_gamma": total_gamma,
+            "total_theta": total_theta,
+            "total_vega": total_vega,
+            "position_count": position_count,
+            "last_updated": latest_timestamp,
+        }

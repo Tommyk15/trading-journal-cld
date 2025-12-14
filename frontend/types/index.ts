@@ -253,3 +253,94 @@ export const STRATEGY_OPTIONS = [
 ] as const;
 
 export type StrategyType = (typeof STRATEGY_OPTIONS)[number];
+
+// Dashboard types
+export type TimePeriod = 'all' | 'ytd' | 'monthly' | 'weekly';
+
+export interface PortfolioGreeksSummary {
+  total_delta: number;
+  total_gamma: number;
+  total_theta: number;
+  total_vega: number;
+  position_count: number;
+  last_updated: string | null;
+}
+
+export interface StreakInfo {
+  max_consecutive_wins: number;
+  max_consecutive_losses: number;
+  current_streak: number;
+  current_streak_type: 'win' | 'loss' | 'none';
+}
+
+export interface StrategyStats {
+  strategy_type: string;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  total_commission: number;
+  net_pnl: number;
+  average_pnl: number;
+}
+
+export interface UnderlyingStats {
+  underlying: string;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  total_commission: number;
+  net_pnl: number;
+  average_pnl: number;
+}
+
+export interface DashboardSummary {
+  // Core metrics
+  total_pnl: number;
+  total_trades: number;
+  win_rate: number;
+  avg_winner: number;
+  avg_loser: number;
+  profit_factor: number | null;
+  max_drawdown_percent: number;
+
+  // Daily metrics
+  avg_profit_per_day: number;
+  trading_days: number;
+
+  // Best/Worst performers
+  best_strategy: StrategyStats | null;
+  worst_strategy: StrategyStats | null;
+  best_ticker: UnderlyingStats | null;
+  worst_ticker: UnderlyingStats | null;
+
+  // Risk metrics
+  sharpe_ratio: number | null;
+  sortino_ratio: number | null;
+  expectancy: number;
+
+  // Streak info
+  streak_info: StreakInfo;
+
+  // Portfolio Greeks
+  portfolio_greeks: PortfolioGreeksSummary | null;
+}
+
+export interface MetricsTimePoint {
+  date: string;
+  cumulative_pnl: number;
+  trade_count: number;
+  win_rate: number;
+  profit_factor: number | null;
+  drawdown_percent: number;
+}
+
+export interface MetricsTimeSeriesResponse {
+  data_points: MetricsTimePoint[];
+  period: TimePeriod;
+  start_date: string | null;
+  end_date: string | null;
+}
