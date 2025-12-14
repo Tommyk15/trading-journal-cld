@@ -7,12 +7,10 @@ This module implements a state-based approach to grouping executions into trades
 4. Links rolls and adjustments
 """
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 
 from trading_journal.models.execution import Execution
 
@@ -63,10 +61,10 @@ class TradeGroup:
     opening_position: dict[str, int] = field(default_factory=dict)  # leg_key -> opening qty
     strategy_type: str = "Unknown"
     status: str = "OPEN"
-    parent_trade_id: Optional[int] = None
-    roll_type: Optional[str] = None  # "ROLL" or "ADJUST" or None
+    parent_trade_id: int | None = None
+    roll_type: str | None = None  # "ROLL" or "ADJUST" or None
     is_assignment: bool = False  # True if this trade is from option assignment/exercise
-    assigned_from_trade_id: Optional[int] = None  # ID of the option trade that was assigned
+    assigned_from_trade_id: int | None = None  # ID of the option trade that was assigned
 
     def add_execution(self, exec: Execution) -> None:
         """Add execution to this trade group."""
@@ -77,13 +75,13 @@ class TradeGroup:
         return [e.id for e in self.executions]
 
     @property
-    def opened_at(self) -> Optional[datetime]:
+    def opened_at(self) -> datetime | None:
         if not self.executions:
             return None
         return min(e.execution_time for e in self.executions)
 
     @property
-    def closed_at(self) -> Optional[datetime]:
+    def closed_at(self) -> datetime | None:
         if self.status != "CLOSED" or not self.executions:
             return None
         return max(e.execution_time for e in self.executions)
@@ -118,7 +116,7 @@ class PositionStateMachine:
         # Track multiple concurrent trades by their leg sets
         self.open_trades: dict[frozenset[str], TradeGroup] = {}  # leg_keys -> TradeGroup
         self.completed_trades: list[TradeGroup] = []
-        self.last_trade_close_time: Optional[datetime] = None
+        self.last_trade_close_time: datetime | None = None
 
     def get_leg_key(self, exec: Execution) -> str:
         """Generate unique key for a position leg.
@@ -231,8 +229,8 @@ class PositionStateMachine:
         Args:
             group: List of executions in this group
         """
-        group_legs = frozenset(self.get_leg_key(e) for e in group)
-        group_deltas = self._calculate_deltas(group)
+        frozenset(self.get_leg_key(e) for e in group)
+        self._calculate_deltas(group)
         exec_time = group[0].execution_time
 
         # Separate executions into closing vs opening based on open_close_indicator
@@ -365,7 +363,7 @@ class PositionStateMachine:
                 # Store as open trade
                 self.open_trades[opening_legs] = new_trade
 
-    def _find_matching_trade(self, group_legs: frozenset[str]) -> Optional[tuple[frozenset[str], TradeGroup]]:
+    def _find_matching_trade(self, group_legs: frozenset[str]) -> tuple[frozenset[str], TradeGroup] | None:
         """Find an open trade that matches the given legs.
 
         A trade matches if the group legs overlap with the trade's legs.
@@ -609,10 +607,9 @@ class PositionStateMachine:
 
             self.current_trade.status = "CLOSED"
             self.completed_trades.append(self.current_trade)
-            old_trade = self.current_trade
             self.last_trade_close_time = max(e.execution_time for e in close_execs)
         else:
-            old_trade = None
+            pass
 
         # Apply all deltas
         self._apply_deltas(deltas, group)

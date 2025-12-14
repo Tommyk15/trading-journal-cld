@@ -1,16 +1,14 @@
 """Service for managing positions - syncing from IBKR and tracking open positions."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.position import Position
 from trading_journal.models.trade import Trade
-from trading_journal.services.ibkr_service import IBKRService
 
 
 class PositionService:
@@ -26,8 +24,8 @@ class PositionService:
 
     async def sync_positions_from_ibkr(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        host: str | None = None,
+        port: int | None = None,
     ) -> dict:
         """Sync current positions from IBKR to database.
 
@@ -38,8 +36,8 @@ class PositionService:
         Returns:
             Dictionary with sync statistics
         """
-        from trading_journal.services.ibkr_service import _sync_ibkr_operation
         from trading_journal.config import get_settings
+        from trading_journal.services.ibkr_service import _sync_ibkr_operation
 
         settings = get_settings()
         host = host or settings.ibkr_host
@@ -100,13 +98,13 @@ class PositionService:
                     # Update existing position
                     existing.quantity = position_data["quantity"]
                     existing.avg_cost = position_data["avg_cost"]
-                    existing.updated_at = datetime.now(timezone.utc)
+                    existing.updated_at = datetime.now(UTC)
                     stats["updated"] += 1
                 else:
                     # Create new position (needs to be linked to a trade)
                     # For now, we'll create a placeholder trade
                     trade = await self.create_placeholder_trade(position_data)
-                    position = await self.create_position(trade.id, position_data)
+                    await self.create_position(trade.id, position_data)
                     stats["created"] += 1
 
             except Exception as e:
@@ -116,7 +114,7 @@ class PositionService:
         await self.session.commit()
         return stats
 
-    async def find_matching_position(self, position_data: dict) -> Optional[Position]:
+    async def find_matching_position(self, position_data: dict) -> Position | None:
         """Find existing position matching the criteria.
 
         Args:
@@ -152,7 +150,7 @@ class PositionService:
             underlying=position_data["underlying"],
             strategy_type="Single",  # Placeholder
             status="OPEN",
-            opened_at=datetime.now(timezone.utc),
+            opened_at=datetime.now(UTC),
             closed_at=None,
             realized_pnl=Decimal("0.00"),
             unrealized_pnl=Decimal("0.00"),
@@ -226,12 +224,12 @@ class PositionService:
             pnl_per_share = position.avg_cost - current_price
 
         position.unrealized_pnl = pnl_per_share * abs(position.quantity)
-        position.updated_at = datetime.now(timezone.utc)
+        position.updated_at = datetime.now(UTC)
 
         await self.session.flush()
         return position
 
-    async def get_by_id(self, position_id: int) -> Optional[Position]:
+    async def get_by_id(self, position_id: int) -> Position | None:
         """Get position by ID.
 
         Args:
@@ -246,7 +244,7 @@ class PositionService:
 
     async def get_open_positions(
         self,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> list[Position]:
         """Get all open positions.
 

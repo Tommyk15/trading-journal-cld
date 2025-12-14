@@ -5,14 +5,14 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from decimal import Decimal
 from io import StringIO
-from typing import List, Dict, Any
+from typing import Any
 
 
 class FlexQueryParser:
     """Parse IBKR Flex Query reports in CSV or XML format."""
 
     @staticmethod
-    def parse_file(content: str) -> List[Dict[str, Any]]:
+    def parse_file(content: str) -> list[dict[str, Any]]:
         """Parse Flex Query file content.
 
         Args:
@@ -35,7 +35,7 @@ class FlexQueryParser:
             raise ValueError("Unsupported file format. Expected XML or CSV.")
 
     @staticmethod
-    def _parse_xml(content: str) -> List[Dict[str, Any]]:
+    def _parse_xml(content: str) -> list[dict[str, Any]]:
         """Parse XML Flex Query report.
 
         Args:
@@ -63,7 +63,7 @@ class FlexQueryParser:
         return executions
 
     @staticmethod
-    def _parse_csv(content: str) -> List[Dict[str, Any]]:
+    def _parse_csv(content: str) -> list[dict[str, Any]]:
         """Parse CSV Flex Query report.
 
         Args:
@@ -88,7 +88,7 @@ class FlexQueryParser:
         return executions
 
     @staticmethod
-    def _parse_trade_element(trade: ET.Element) -> Dict[str, Any]:
+    def _parse_trade_element(trade: ET.Element) -> dict[str, Any]:
         """Parse a Trade XML element.
 
         Args:
@@ -159,7 +159,7 @@ class FlexQueryParser:
             return None
 
     @staticmethod
-    def _parse_csv_row(row: Dict[str, str]) -> Dict[str, Any]:
+    def _parse_csv_row(row: dict[str, str]) -> dict[str, Any]:
         """Parse a CSV row.
 
         Args:

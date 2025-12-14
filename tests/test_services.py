@@ -1,11 +1,10 @@
 """Tests for service layer."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
-from trading_journal.models.execution import Execution
 from trading_journal.services.execution_service import ExecutionService
 from trading_journal.services.trade_grouping_service import TradeGroupingService
 
@@ -19,7 +18,7 @@ async def test_create_execution(db_session):
         "exec_id": "TEST123",
         "order_id": 1,
         "perm_id": 1,
-        "execution_time": datetime.now(timezone.utc),
+        "execution_time": datetime.now(UTC),
         "underlying": "SPY",
         "security_type": "STK",
         "exchange": "SMART",
@@ -50,7 +49,7 @@ async def test_get_by_exec_id(db_session):
         "exec_id": "TEST456",
         "order_id": 2,
         "perm_id": 2,
-        "execution_time": datetime.now(timezone.utc),
+        "execution_time": datetime.now(UTC),
         "underlying": "AAPL",
         "security_type": "STK",
         "exchange": "SMART",
@@ -84,7 +83,7 @@ async def test_list_executions(db_session):
             "exec_id": f"TEST{i}",
             "order_id": i,
             "perm_id": i,
-            "execution_time": datetime.now(timezone.utc) - timedelta(days=i),
+            "execution_time": datetime.now(UTC) - timedelta(days=i),
             "underlying": "SPY" if i % 2 == 0 else "AAPL",
             "security_type": "STK",
             "exchange": "SMART",
@@ -118,7 +117,7 @@ async def test_trade_grouping_simple(db_session):
         "exec_id": "BUY1",
         "order_id": 1,
         "perm_id": 1,
-        "execution_time": datetime.now(timezone.utc),
+        "execution_time": datetime.now(UTC),
         "underlying": "TSLA",
         "security_type": "STK",
         "exchange": "SMART",
@@ -135,7 +134,7 @@ async def test_trade_grouping_simple(db_session):
         "exec_id": "SELL1",
         "order_id": 2,
         "perm_id": 2,
-        "execution_time": datetime.now(timezone.utc) + timedelta(hours=1),
+        "execution_time": datetime.now(UTC) + timedelta(hours=1),
         "underlying": "TSLA",
         "security_type": "STK",
         "exchange": "SMART",

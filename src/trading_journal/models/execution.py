@@ -1,6 +1,6 @@
 """Execution model - Raw execution data from IBKR."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String
@@ -28,7 +28,7 @@ class Execution(Base):
 
     # Timestamps
     execution_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Contract details
     underlying: Mapped[str] = mapped_column(String(10), nullable=False, index=True)

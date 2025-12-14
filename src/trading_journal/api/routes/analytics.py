@@ -1,6 +1,5 @@
 """API routes for trade analytics and statistics."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +22,10 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 @router.get("/win-rate", response_model=WinRateStats)
 async def get_win_rate(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get win rate and related statistics.
@@ -62,9 +61,9 @@ async def get_win_rate(
 
 @router.get("/strategy-breakdown", response_model=StrategyBreakdown)
 async def get_strategy_breakdown(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get performance breakdown by strategy type.
@@ -103,9 +102,9 @@ async def get_strategy_breakdown(
 
 @router.get("/underlying-breakdown", response_model=UnderlyingBreakdown)
 async def get_underlying_breakdown(
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get performance breakdown by underlying symbol.
@@ -144,9 +143,9 @@ async def get_underlying_breakdown(
 
 @router.get("/monthly-performance", response_model=MonthlyPerformance)
 async def get_monthly_performance(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
-    year: Optional[int] = Query(None, description="Filter by year"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    year: int | None = Query(None, description="Filter by year"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get monthly performance breakdown.
@@ -177,8 +176,8 @@ async def get_monthly_performance(
 
 @router.get("/trade-duration", response_model=TradeDurationStats)
 async def get_trade_duration_stats(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get statistics about trade durations.

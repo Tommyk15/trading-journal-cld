@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +22,10 @@ class AnalyticsService:
 
     async def get_win_rate(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> dict:
         """Calculate win rate and related statistics.
 
@@ -106,9 +105,9 @@ class AnalyticsService:
 
     async def get_strategy_breakdown(
         self,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Get performance breakdown by strategy type.
 
@@ -167,9 +166,9 @@ class AnalyticsService:
 
     async def get_underlying_breakdown(
         self,
-        strategy_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Get performance breakdown by underlying symbol.
 
@@ -228,9 +227,9 @@ class AnalyticsService:
 
     async def get_monthly_performance(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
-        year: Optional[int] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        year: int | None = None,
     ) -> list[dict]:
         """Get monthly performance breakdown.
 
@@ -292,8 +291,8 @@ class AnalyticsService:
 
     async def get_trade_duration_stats(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
     ) -> dict:
         """Get statistics about trade durations.
 

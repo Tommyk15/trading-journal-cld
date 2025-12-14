@@ -1,6 +1,5 @@
 """API routes for positions."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +57,7 @@ async def sync_positions(
 
 @router.get("", response_model=PositionList)
 async def list_positions(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     options_only: bool = Query(False, description="Only show option positions"),
     session: AsyncSession = Depends(get_db),
 ):

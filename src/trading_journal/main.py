@@ -5,7 +5,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from trading_journal.api.routes import analytics, calendar, executions, greeks, performance, positions, rolls, trades
+from trading_journal.api.routes import (
+    analytics,
+    calendar,
+    executions,
+    greeks,
+    performance,
+    positions,
+    rolls,
+    trades,
+)
 from trading_journal.config import get_settings
 from trading_journal.core.database import close_db, init_db
 

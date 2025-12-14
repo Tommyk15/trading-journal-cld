@@ -1,12 +1,8 @@
 """Tests for API endpoints."""
 
-from datetime import datetime
-from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-
-from trading_journal.services.execution_service import ExecutionService
 
 
 def test_root_endpoint(client: TestClient):

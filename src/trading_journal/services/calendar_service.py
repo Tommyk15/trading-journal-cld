@@ -1,8 +1,6 @@
 """Calendar service - aggregates trades and positions by time periods."""
 
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +23,7 @@ class CalendarService:
     async def get_upcoming_expirations(
         self,
         days_ahead: int = 30,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> list[dict]:
         """Get upcoming option expirations.
 
@@ -36,14 +34,14 @@ class CalendarService:
         Returns:
             List of expiration dates with position details
         """
-        end_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+        end_date = datetime.now(UTC) + timedelta(days=days_ahead)
 
         stmt = (
             select(Position)
             .where(
                 Position.expiration.isnot(None),
                 Position.expiration <= end_date,
-                Position.expiration >= datetime.now(timezone.utc),
+                Position.expiration >= datetime.now(UTC),
             )
             .order_by(Position.expiration)
         )
@@ -66,13 +64,13 @@ class CalendarService:
         # Format response
         expirations = []
         for exp_date, exp_positions in sorted(by_expiration.items()):
-            days_until = (exp_date - datetime.now(timezone.utc).date()).days
+            days_until = (exp_date - datetime.now(UTC).date()).days
 
             expirations.append({
                 "expiration_date": exp_date,
                 "days_until_expiration": days_until,
                 "total_positions": len(exp_positions),
-                "underlyings": list(set(p.underlying for p in exp_positions)),
+                "underlyings": list({p.underlying for p in exp_positions}),
                 "positions": [
                     {
                         "id": p.id,
@@ -91,8 +89,8 @@ class CalendarService:
     async def get_trades_by_week(
         self,
         year: int,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
     ) -> list[dict]:
         """Get trades grouped by week.
 
@@ -157,7 +155,7 @@ class CalendarService:
         self,
         start_date: datetime,
         end_date: datetime,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> dict:
         """Get calendar view of trades with daily details.
 
@@ -218,7 +216,7 @@ class CalendarService:
         self,
         start_date: datetime,
         end_date: datetime,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> dict:
         """Get calendar view of option expirations.
 
@@ -278,7 +276,7 @@ class CalendarService:
         self,
         year: int,
         month: int,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> dict:
         """Get detailed summary for a specific month.
 
@@ -346,14 +344,14 @@ class CalendarService:
             "total_commission": total_commission,
             "net_pnl": total_pnl - total_commission,
             "positions_expiring": len(positions),
-            "unique_underlyings_traded": len(set(t.underlying for t in trades)),
+            "unique_underlyings_traded": len({t.underlying for t in trades}),
         }
 
     async def get_day_of_week_analysis(
         self,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Analyze performance by day of week.
 

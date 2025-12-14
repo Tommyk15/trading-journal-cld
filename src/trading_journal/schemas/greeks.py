@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class GreeksFetchRequest(BaseModel):
     """Request to fetch Greeks from IBKR."""
 
-    host: Optional[str] = Field(None, description="IBKR host (optional)")
-    port: Optional[int] = Field(None, description="IBKR port (optional)")
+    host: str | None = Field(None, description="IBKR host (optional)")
+    port: int | None = Field(None, description="IBKR port (optional)")
 
 
 class GreeksFetchResponse(BaseModel):
@@ -31,14 +30,14 @@ class GreeksResponse(BaseModel):
     id: int
     position_id: int
     timestamp: datetime
-    delta: Optional[Decimal]
-    gamma: Optional[Decimal]
-    theta: Optional[Decimal]
-    vega: Optional[Decimal]
-    rho: Optional[Decimal]
-    implied_volatility: Optional[Decimal]
-    underlying_price: Optional[Decimal]
-    option_price: Optional[Decimal]
+    delta: Decimal | None
+    gamma: Decimal | None
+    theta: Decimal | None
+    vega: Decimal | None
+    rho: Decimal | None
+    implied_volatility: Decimal | None
+    underlying_price: Decimal | None
+    option_price: Decimal | None
     model_type: str
 
     model_config = ConfigDict(from_attributes=True)

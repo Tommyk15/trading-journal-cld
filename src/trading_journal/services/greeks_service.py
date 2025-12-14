@@ -1,8 +1,6 @@
 """Service for managing Greeks data - fetching, storing, and retrieving."""
 
-from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +24,9 @@ class GreeksService:
     async def fetch_and_store_greeks(
         self,
         position_id: int,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-    ) -> Optional[Greeks]:
+        host: str | None = None,
+        port: int | None = None,
+    ) -> Greeks | None:
         """Fetch Greeks from IBKR and store in database.
 
         Args:
@@ -71,8 +69,8 @@ class GreeksService:
 
     async def fetch_all_positions_greeks(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        host: str | None = None,
+        port: int | None = None,
     ) -> dict:
         """Fetch Greeks for all open positions from IBKR.
 
@@ -141,7 +139,7 @@ class GreeksService:
         """
         greeks = Greeks(
             position_id=position_id,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             delta=greeks_data.get("delta"),
             gamma=greeks_data.get("gamma"),
             theta=greeks_data.get("theta"),
@@ -157,7 +155,7 @@ class GreeksService:
         await self.session.flush()
         return greeks
 
-    async def get_latest_greeks(self, position_id: int) -> Optional[Greeks]:
+    async def get_latest_greeks(self, position_id: int) -> Greeks | None:
         """Get latest Greeks for a position.
 
         Args:
@@ -178,8 +176,8 @@ class GreeksService:
     async def get_greeks_history(
         self,
         position_id: int,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         limit: int = 100,
     ) -> list[Greeks]:
         """Get historical Greeks for a position.
@@ -209,7 +207,7 @@ class GreeksService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_position(self, position_id: int) -> Optional[Position]:
+    async def get_position(self, position_id: int) -> Position | None:
         """Get position by ID.
 
         Args:

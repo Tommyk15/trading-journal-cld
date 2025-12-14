@@ -1,7 +1,6 @@
 """API routes for Greeks data."""
 
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,8 +86,8 @@ async def get_latest_greeks(
 @router.get("/position/{position_id}/history", response_model=GreeksHistoryResponse)
 async def get_greeks_history(
     position_id: int,
-    start_date: Optional[datetime] = Query(None, description="Start date"),
-    end_date: Optional[datetime] = Query(None, description="End date"),
+    start_date: datetime | None = Query(None, description="Start date"),
+    end_date: datetime | None = Query(None, description="End date"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     session: AsyncSession = Depends(get_db),
 ):

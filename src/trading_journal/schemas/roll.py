@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,9 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class RollDetectionRequest(BaseModel):
     """Request to detect rolls."""
 
-    underlying: Optional[str] = Field(None, description="Filter by underlying symbol")
-    start_date: Optional[datetime] = Field(None, description="Start date for analysis")
-    end_date: Optional[datetime] = Field(None, description="End date for analysis")
+    underlying: str | None = Field(None, description="Filter by underlying symbol")
+    start_date: datetime | None = Field(None, description="Start date for analysis")
+    end_date: datetime | None = Field(None, description="End date for analysis")
 
 
 class RollDetectionResponse(BaseModel):
@@ -32,12 +31,12 @@ class RollChainTrade(BaseModel):
     strategy_type: str
     status: str
     opened_at: datetime
-    closed_at: Optional[datetime]
+    closed_at: datetime | None
     total_pnl: Decimal
     num_legs: int
     is_roll: bool
-    rolled_from_trade_id: Optional[int]
-    rolled_to_trade_id: Optional[int]
+    rolled_from_trade_id: int | None
+    rolled_to_trade_id: int | None
 
     model_config = ConfigDict(from_attributes=True)
 

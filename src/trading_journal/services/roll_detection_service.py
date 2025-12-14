@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +25,9 @@ class RollDetectionService:
 
     async def detect_and_link_rolls(
         self,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> dict:
         """Detect rolls and link trades together.
 
@@ -131,7 +130,7 @@ class RollDetectionService:
         closed_trade: Trade,
         subsequent_trades: list[Trade],
         processed: set,
-    ) -> Optional[Trade]:
+    ) -> Trade | None:
         """Find a trade that is likely a roll from the closed trade.
 
         Args:
@@ -331,7 +330,7 @@ class RollDetectionService:
 
     async def get_roll_statistics(
         self,
-        underlying: Optional[str] = None,
+        underlying: str | None = None,
     ) -> dict:
         """Get statistics about rolled positions.
 

@@ -1,6 +1,6 @@
 """Greeks model - Historical Greeks data for options."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String
@@ -43,7 +43,7 @@ class Greeks(Base):
     model_type: Mapped[str] = mapped_column(String(20), default="IBKR", nullable=False)
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     def __repr__(self) -> str:
         """String representation."""

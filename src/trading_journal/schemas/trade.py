@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,20 +12,20 @@ class TradeBase(BaseModel):
     underlying: str = Field(..., description="Underlying symbol", max_length=10)
     strategy_type: str = Field(..., description="Strategy classification", max_length=50)
     status: str = Field(..., description="Trade status (OPEN, CLOSED, EXPIRED)", max_length=20)
-    notes: Optional[str] = Field(None, description="User notes")
-    tags: Optional[str] = Field(None, description="Comma-separated tags", max_length=255)
+    notes: str | None = Field(None, description="User notes")
+    tags: str | None = Field(None, description="Comma-separated tags", max_length=255)
 
 
 class TradeCreate(TradeBase):
     """Schema for creating a trade."""
 
     opened_at: datetime = Field(..., description="Opening timestamp")
-    closed_at: Optional[datetime] = Field(None, description="Closing timestamp")
+    closed_at: datetime | None = Field(None, description="Closing timestamp")
     realized_pnl: Decimal = Field(default=Decimal("0.00"), description="Realized P&L")
     unrealized_pnl: Decimal = Field(default=Decimal("0.00"), description="Unrealized P&L")
     total_pnl: Decimal = Field(default=Decimal("0.00"), description="Total P&L")
     opening_cost: Decimal = Field(..., description="Opening cost")
-    closing_proceeds: Optional[Decimal] = Field(None, description="Closing proceeds")
+    closing_proceeds: Decimal | None = Field(None, description="Closing proceeds")
     total_commission: Decimal = Field(default=Decimal("0.00"), description="Total commissions")
     num_legs: int = Field(..., description="Number of legs")
     num_executions: int = Field(..., description="Number of executions")
@@ -35,9 +34,9 @@ class TradeCreate(TradeBase):
 class TradeUpdate(BaseModel):
     """Schema for updating a trade."""
 
-    notes: Optional[str] = None
-    tags: Optional[str] = None
-    status: Optional[str] = None
+    notes: str | None = None
+    tags: str | None = None
+    status: str | None = None
 
 
 class TradeResponse(TradeBase):
@@ -47,20 +46,20 @@ class TradeResponse(TradeBase):
 
     id: int = Field(..., description="Database ID")
     opened_at: datetime = Field(..., description="Opening timestamp")
-    closed_at: Optional[datetime] = Field(None, description="Closing timestamp")
+    closed_at: datetime | None = Field(None, description="Closing timestamp")
     realized_pnl: Decimal = Field(..., description="Realized P&L")
     unrealized_pnl: Decimal = Field(..., description="Unrealized P&L")
     total_pnl: Decimal = Field(..., description="Total P&L")
     opening_cost: Decimal = Field(..., description="Opening cost")
-    closing_proceeds: Optional[Decimal] = Field(None, description="Closing proceeds")
+    closing_proceeds: Decimal | None = Field(None, description="Closing proceeds")
     total_commission: Decimal = Field(..., description="Total commissions")
     num_legs: int = Field(..., description="Number of legs")
     num_executions: int = Field(..., description="Number of executions")
     is_roll: bool = Field(..., description="Whether this is a roll")
-    rolled_from_trade_id: Optional[int] = Field(None, description="Rolled from trade ID")
-    rolled_to_trade_id: Optional[int] = Field(None, description="Rolled to trade ID")
+    rolled_from_trade_id: int | None = Field(None, description="Rolled from trade ID")
+    rolled_to_trade_id: int | None = Field(None, description="Rolled to trade ID")
     is_assignment: bool = Field(False, description="Whether this is from option assignment")
-    assigned_from_trade_id: Optional[int] = Field(None, description="Option trade that was assigned")
+    assigned_from_trade_id: int | None = Field(None, description="Option trade that was assigned")
     created_at: datetime = Field(..., description="Record creation timestamp")
     updated_at: datetime = Field(..., description="Record update timestamp")
 
@@ -77,9 +76,9 @@ class TradeList(BaseModel):
 class TradeProcessRequest(BaseModel):
     """Schema for trade processing request."""
 
-    underlying: Optional[str] = Field(None, description="Filter by underlying")
-    start_date: Optional[datetime] = Field(None, description="Start date filter")
-    end_date: Optional[datetime] = Field(None, description="End date filter")
+    underlying: str | None = Field(None, description="Filter by underlying")
+    start_date: datetime | None = Field(None, description="Start date filter")
+    end_date: datetime | None = Field(None, description="End date filter")
 
 
 class TradeProcessResponse(BaseModel):
@@ -96,25 +95,25 @@ class ManualTradeCreateRequest(BaseModel):
 
     execution_ids: list[int] = Field(..., description="List of execution IDs to group")
     strategy_type: str = Field(..., description="Strategy type", max_length=50)
-    custom_strategy: Optional[str] = Field(None, description="Custom strategy name if 'Custom' selected")
-    notes: Optional[str] = Field(None, description="Trade notes")
-    tags: Optional[str] = Field(None, description="Comma-separated tags", max_length=255)
+    custom_strategy: str | None = Field(None, description="Custom strategy name if 'Custom' selected")
+    notes: str | None = Field(None, description="Trade notes")
+    tags: str | None = Field(None, description="Comma-separated tags", max_length=255)
     auto_match_closes: bool = Field(True, description="Auto-match closing transactions for opens using FIFO")
 
 
 class TradeExecutionsUpdateRequest(BaseModel):
     """Schema for adding/removing executions from a trade."""
 
-    add_execution_ids: Optional[list[int]] = Field(None, description="Execution IDs to add")
-    remove_execution_ids: Optional[list[int]] = Field(None, description="Execution IDs to remove")
+    add_execution_ids: list[int] | None = Field(None, description="Execution IDs to add")
+    remove_execution_ids: list[int] | None = Field(None, description="Execution IDs to remove")
 
 
 class SuggestedGroupLeg(BaseModel):
     """Schema for a leg within a suggested trade group."""
 
-    option_type: Optional[str] = Field(None, description="Option type (C or P)")
-    strike: Optional[float] = Field(None, description="Strike price")
-    expiration: Optional[str] = Field(None, description="Expiration date")
+    option_type: str | None = Field(None, description="Option type (C or P)")
+    strike: float | None = Field(None, description="Strike price")
+    expiration: str | None = Field(None, description="Expiration date")
     security_type: str = Field(..., description="Security type (OPT, STK)")
     total_quantity: int = Field(..., description="Net quantity position")
     actions: list[str] = Field(..., description="Actions involved (BTO, BTC, STO, STC)")
@@ -129,15 +128,15 @@ class SuggestedGroup(BaseModel):
     total_pnl: float = Field(..., description="Estimated P&L for this group")
     status: str = Field(..., description="Trade status (OPEN, CLOSED)")
     legs: list[SuggestedGroupLeg] = Field(default_factory=list, description="Trade legs")
-    open_date: Optional[str] = Field(None, description="Open date")
-    close_date: Optional[str] = Field(None, description="Close date")
+    open_date: str | None = Field(None, description="Open date")
+    close_date: str | None = Field(None, description="Close date")
     num_executions: int = Field(..., description="Number of executions")
 
 
 class SuggestGroupingRequest(BaseModel):
     """Schema for suggested grouping request."""
 
-    execution_ids: Optional[list[int]] = Field(None, description="Specific execution IDs to analyze (optional)")
+    execution_ids: list[int] | None = Field(None, description="Specific execution IDs to analyze (optional)")
 
 
 class SuggestGroupingResponse(BaseModel):

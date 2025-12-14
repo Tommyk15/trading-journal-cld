@@ -1,8 +1,7 @@
 """Performance metrics service - time-series P&L and performance tracking."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +22,10 @@ class PerformanceMetricsService:
 
     async def get_cumulative_pnl(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Get cumulative P&L over time.
 
@@ -76,10 +75,10 @@ class PerformanceMetricsService:
 
     async def get_daily_pnl(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[dict]:
         """Get daily aggregated P&L.
 
@@ -141,8 +140,8 @@ class PerformanceMetricsService:
 
     async def get_drawdown_analysis(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
     ) -> dict:
         """Calculate drawdown statistics.
 
@@ -208,8 +207,8 @@ class PerformanceMetricsService:
 
     async def get_sharpe_ratio(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
         risk_free_rate: float = 0.02,  # 2% annual risk-free rate
     ) -> dict:
         """Calculate Sharpe ratio and related risk metrics.
@@ -265,8 +264,8 @@ class PerformanceMetricsService:
 
     async def get_profit_curve_by_strategy(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> dict:
         """Get profit curves for each strategy type.
 
@@ -323,8 +322,8 @@ class PerformanceMetricsService:
 
     async def get_equity_curve_summary(
         self,
-        underlying: Optional[str] = None,
-        strategy_type: Optional[str] = None,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
     ) -> dict:
         """Get summary of equity curve with key metrics.
 

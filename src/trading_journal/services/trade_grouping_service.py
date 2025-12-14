@@ -9,9 +9,8 @@ This module uses a position state machine approach to correctly identify trade b
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
@@ -124,9 +123,9 @@ class TradeGroupingService:
 
     async def process_executions_to_trades(
         self,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> dict:
         """Process executions into trades with strategy classification.
 
@@ -388,7 +387,7 @@ class TradeGroupingService:
         """
         return all(cumulative_position.get(leg, 0) == 0 for leg in trade_legs)
 
-    async def _save_trade_from_ledger(self, ledger: TradeLedger, is_closed: bool) -> Optional[Trade]:
+    async def _save_trade_from_ledger(self, ledger: TradeLedger, is_closed: bool) -> Trade | None:
         """Save a trade from a ledger.
 
         Args:
@@ -594,7 +593,7 @@ class TradeGroupingService:
 
         return f"{num_legs}-Leg Complex"
 
-    async def _create_or_update_trade(self, trade_data: dict) -> Optional[Trade]:
+    async def _create_or_update_trade(self, trade_data: dict) -> Trade | None:
         """Create or update a trade record.
 
         Args:
@@ -659,8 +658,8 @@ class TradeGroupingService:
             trade_groups = state_machine.process_executions(execs)
 
             # Convert trade groups to Trade models
-            prev_trade: Optional[Trade] = None
-            current_chain_id: Optional[int] = None
+            prev_trade: Trade | None = None
+            current_chain_id: int | None = None
 
             for group in trade_groups:
                 trade = await self._create_trade_from_group(group)
@@ -698,7 +697,7 @@ class TradeGroupingService:
         await self.session.commit()
         return stats
 
-    async def _create_trade_from_group(self, group: TradeGroup) -> Optional[Trade]:
+    async def _create_trade_from_group(self, group: TradeGroup) -> Trade | None:
         """Create a Trade model from a TradeGroup.
 
         Args:

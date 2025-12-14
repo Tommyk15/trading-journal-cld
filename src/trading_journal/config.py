@@ -1,7 +1,6 @@
 """Application configuration using Pydantic settings."""
 
 from functools import lru_cache
-from typing import Optional
 
 from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,11 +27,11 @@ class Settings(BaseSettings):
     postgres_user: str = Field(default="trading_journal")
     postgres_password: str = Field(default="trading_journal")
     postgres_db: str = Field(default="trading_journal")
-    database_url: Optional[str] = None
+    database_url: str | None = None
 
     @field_validator("database_url", mode="before")
     @classmethod
-    def assemble_db_connection(cls, v: Optional[str], values) -> str:
+    def assemble_db_connection(cls, v: str | None, values) -> str:
         """Build database URL from components if not provided."""
         if isinstance(v, str):
             return v
@@ -53,7 +52,7 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=1)
 
     # IBKR Flex Query Configuration
-    ibkr_flex_token: Optional[str] = Field(default=None)
+    ibkr_flex_token: str | None = Field(default=None)
     ibkr_flex_query_id: str = Field(default="1348073")
 
     # API Settings

@@ -1,6 +1,5 @@
 """API routes for calendar data aggregation."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +27,7 @@ router = APIRouter(prefix="/calendar", tags=["calendar"])
 @router.get("/upcoming-expirations", response_model=UpcomingExpirationsResponse)
 async def get_upcoming_expirations(
     days_ahead: int = Query(30, ge=1, le=365, description="Days to look ahead"),
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get upcoming option expirations.
@@ -59,8 +58,8 @@ async def get_upcoming_expirations(
 @router.get("/trades-by-week", response_model=WeeklyStatsResponse)
 async def get_trades_by_week(
     year: int = Query(..., description="Year to analyze"),
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get trades grouped by week.
@@ -94,7 +93,7 @@ async def get_trades_by_week(
 async def get_trades_calendar(
     start_date: str = Query(..., description="Start date (ISO format)"),
     end_date: str = Query(..., description="End date (ISO format)"),
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get calendar view of trades.
@@ -143,7 +142,7 @@ async def get_trades_calendar(
 async def get_expiration_calendar(
     start_date: str = Query(..., description="Start date (ISO format)"),
     end_date: str = Query(..., description="End date (ISO format)"),
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get calendar view of option expirations.
@@ -192,7 +191,7 @@ async def get_expiration_calendar(
 async def get_monthly_summary(
     year: int = Query(..., description="Year"),
     month: int = Query(..., ge=1, le=12, description="Month (1-12)"),
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get detailed summary for a specific month.
@@ -221,9 +220,9 @@ async def get_monthly_summary(
 
 @router.get("/day-of-week-analysis", response_model=DayOfWeekAnalysisResponse)
 async def get_day_of_week_analysis(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Analyze performance by day of week.

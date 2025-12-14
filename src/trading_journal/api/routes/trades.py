@@ -1,20 +1,19 @@
 """API routes for trades."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select, delete, and_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.core.database import get_db
-from trading_journal.models.trade import Trade
 from trading_journal.models.execution import Execution
+from trading_journal.models.trade import Trade
 from trading_journal.schemas.trade import (
     ManualTradeCreateRequest,
     MergeTradesRequest,
+    SuggestedGroup,
     SuggestGroupingRequest,
     SuggestGroupingResponse,
-    SuggestedGroup,
     TradeExecutionsUpdateRequest,
     TradeList,
     TradeProcessRequest,
@@ -67,9 +66,9 @@ async def process_trades(
 
 @router.get("", response_model=TradeList)
 async def list_trades(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    status: Optional[str] = Query(None, description="Filter by status (OPEN, CLOSED)"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    status: str | None = Query(None, description="Filter by status (OPEN, CLOSED)"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results offset"),
     session: AsyncSession = Depends(get_db),

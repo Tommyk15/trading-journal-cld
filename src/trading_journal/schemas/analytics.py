@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,10 +9,10 @@ from pydantic import BaseModel, Field
 class AnalyticsRequest(BaseModel):
     """Request for analytics data."""
 
-    underlying: Optional[str] = Field(None, description="Filter by underlying symbol")
-    strategy_type: Optional[str] = Field(None, description="Filter by strategy type")
-    start_date: Optional[datetime] = Field(None, description="Start date for analysis")
-    end_date: Optional[datetime] = Field(None, description="End date for analysis")
+    underlying: str | None = Field(None, description="Filter by underlying symbol")
+    strategy_type: str | None = Field(None, description="Filter by strategy type")
+    start_date: datetime | None = Field(None, description="Start date for analysis")
+    end_date: datetime | None = Field(None, description="End date for analysis")
 
 
 class WinRateStats(BaseModel):
@@ -28,7 +27,7 @@ class WinRateStats(BaseModel):
     average_loss: Decimal = Field(..., description="Average losing trade P&L (absolute)")
     largest_win: Decimal = Field(..., description="Largest winning trade")
     largest_loss: Decimal = Field(..., description="Largest losing trade")
-    profit_factor: Optional[float] = Field(None, description="Profit factor (total wins / total losses)")
+    profit_factor: float | None = Field(None, description="Profit factor (total wins / total losses)")
 
 
 class StrategyStats(BaseModel):

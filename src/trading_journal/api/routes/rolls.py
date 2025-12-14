@@ -1,6 +1,5 @@
 """API routes for roll detection and tracking."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,7 +104,7 @@ async def get_roll_chain(
 
 @router.get("/statistics", response_model=RollStatistics)
 async def get_roll_statistics(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get statistics about rolled positions.

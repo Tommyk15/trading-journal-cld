@@ -2,9 +2,8 @@
 
 import json
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -244,9 +243,9 @@ async def sync_flex_query(
 
 @router.get("", response_model=ExecutionList)
 async def list_executions(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    start_date: Optional[datetime] = Query(None, description="Start date filter"),
-    end_date: Optional[datetime] = Query(None, description="End date filter"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    start_date: datetime | None = Query(None, description="Start date filter"),
+    end_date: datetime | None = Query(None, description="End date filter"),
     unassigned_only: bool = Query(False, description="Filter to unassigned executions only"),
     opens_only: bool = Query(False, description="Filter to only opening transactions (BTO/STO)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),

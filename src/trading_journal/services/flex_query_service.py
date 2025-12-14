@@ -5,7 +5,7 @@ import io
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 import httpx
 
@@ -21,7 +21,7 @@ FLEX_FETCH_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexSt
 class FlexQueryService:
     """Service for fetching executions from IBKR Flex Query API."""
 
-    def __init__(self, token: Optional[str] = None, query_id: Optional[str] = None):
+    def __init__(self, token: str | None = None, query_id: str | None = None):
         """Initialize the service.
 
         Args:
@@ -37,7 +37,7 @@ class FlexQueryService:
                 "Set IBKR_FLEX_TOKEN in environment or .env file."
             )
 
-    async def fetch_executions(self, max_retries: int = 30) -> List[Dict[str, Any]]:
+    async def fetch_executions(self, max_retries: int = 30) -> list[dict[str, Any]]:
         """Fetch executions from IBKR Flex Query.
 
         Args:
@@ -130,7 +130,7 @@ class FlexQueryService:
         }
 
         async with httpx.AsyncClient() as client:
-            for attempt in range(max_retries):
+            for _attempt in range(max_retries):
                 try:
                     response = await client.get(
                         FLEX_FETCH_URL, params=params, timeout=30.0
@@ -184,7 +184,7 @@ class FlexQueryService:
 
         await asyncio.sleep(seconds)
 
-    def _parse_executions(self, report_content: str) -> List[Dict[str, Any]]:
+    def _parse_executions(self, report_content: str) -> list[dict[str, Any]]:
         """Parse executions from Flex Query report (CSV or XML).
 
         Args:
@@ -213,7 +213,7 @@ class FlexQueryService:
 
         return executions
 
-    def _parse_csv_row(self, row: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    def _parse_csv_row(self, row: dict[str, str]) -> dict[str, Any] | None:
         """Parse a CSV row into execution dictionary.
 
         Args:
@@ -339,7 +339,7 @@ class FlexQueryService:
             print(f"Error parsing CSV row: {e}")
             return None
 
-    def _parse_trade_element(self, trade: ET.Element) -> Optional[Dict[str, Any]]:
+    def _parse_trade_element(self, trade: ET.Element) -> dict[str, Any] | None:
         """Parse a Trade XML element.
 
         Args:

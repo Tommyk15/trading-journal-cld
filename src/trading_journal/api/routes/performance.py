@@ -1,6 +1,5 @@
 """API routes for performance metrics and time-series data."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,10 +24,10 @@ router = APIRouter(prefix="/performance", tags=["performance"])
 
 @router.get("/cumulative-pnl", response_model=CumulativePnLResponse)
 async def get_cumulative_pnl(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get cumulative P&L over time.
@@ -67,10 +66,10 @@ async def get_cumulative_pnl(
 
 @router.get("/daily-pnl", response_model=DailyPnLResponse)
 async def get_daily_pnl(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get daily aggregated P&L.
@@ -109,8 +108,8 @@ async def get_daily_pnl(
 
 @router.get("/drawdown", response_model=DrawdownAnalysis)
 async def get_drawdown_analysis(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get drawdown analysis.
@@ -137,8 +136,8 @@ async def get_drawdown_analysis(
 
 @router.get("/sharpe-ratio", response_model=SharpeRatioAnalysis)
 async def get_sharpe_ratio(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     risk_free_rate: float = Query(0.02, description="Annual risk-free rate (default 2%)"),
     session: AsyncSession = Depends(get_db),
 ):
@@ -168,8 +167,8 @@ async def get_sharpe_ratio(
 
 @router.get("/strategy-curves", response_model=StrategyProfitCurvesResponse)
 async def get_profit_curves_by_strategy(
-    start_date: Optional[str] = Query(None, description="Start date (ISO format)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format)"),
+    start_date: str | None = Query(None, description="Start date (ISO format)"),
+    end_date: str | None = Query(None, description="End date (ISO format)"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get profit curves for each strategy type.
@@ -210,8 +209,8 @@ async def get_profit_curves_by_strategy(
 
 @router.get("/equity-summary", response_model=EquityCurveSummary)
 async def get_equity_curve_summary(
-    underlying: Optional[str] = Query(None, description="Filter by underlying symbol"),
-    strategy_type: Optional[str] = Query(None, description="Filter by strategy type"),
+    underlying: str | None = Query(None, description="Filter by underlying symbol"),
+    strategy_type: str | None = Query(None, description="Filter by strategy type"),
     session: AsyncSession = Depends(get_db),
 ):
     """Get summary of equity curve.

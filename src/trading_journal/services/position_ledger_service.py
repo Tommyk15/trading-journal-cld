@@ -1,10 +1,9 @@
 """Position Ledger Service - Manages persistent position tracking."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
@@ -43,7 +42,7 @@ class PositionLedgerService:
             return f"{expiry}_{strike}_{exec.option_type}"
         return "STK"
 
-    async def get_position(self, underlying: str, leg_key: str) -> Optional[PositionLedger]:
+    async def get_position(self, underlying: str, leg_key: str) -> PositionLedger | None:
         """Get position for a specific leg.
 
         Args:
@@ -63,7 +62,7 @@ class PositionLedgerService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_all_positions(self, underlying: Optional[str] = None) -> list[PositionLedger]:
+    async def get_all_positions(self, underlying: str | None = None) -> list[PositionLedger]:
         """Get all open positions.
 
         Args:
@@ -114,7 +113,7 @@ class PositionLedgerService:
         if exec.side == "SLD":
             cost = -cost
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if position is None:
             # Create new position
@@ -173,7 +172,7 @@ class PositionLedgerService:
             return []
 
         # Get affected underlyings
-        underlyings = set(e.underlying for e in executions)
+        underlyings = {e.underlying for e in executions}
 
         # Clear existing positions for these underlyings
         for underlying in underlyings:

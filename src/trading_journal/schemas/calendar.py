@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date as date_type
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,8 +14,8 @@ class PositionSummary(BaseModel):
 
     id: int
     underlying: str
-    option_type: Optional[str]
-    strike: Optional[Decimal]
+    option_type: str | None
+    strike: Decimal | None
     quantity: int
     unrealized_pnl: Decimal
 

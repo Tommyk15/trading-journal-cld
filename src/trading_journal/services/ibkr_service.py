@@ -3,7 +3,6 @@
 import asyncio
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from ib_insync import IB, Fill
 
@@ -54,9 +53,9 @@ class IBKRService:
 
     async def connect(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        client_id: Optional[int] = None,
+        host: str | None = None,
+        port: int | None = None,
+        client_id: int | None = None,
     ) -> bool:
         """Connect to IBKR TWS/Gateway.
 
@@ -122,7 +121,7 @@ class IBKRService:
 
         return executions
 
-    def _parse_fill(self, fill: Fill) -> Optional[dict]:
+    def _parse_fill(self, fill: Fill) -> dict | None:
         """Parse IBKR Fill object into dict.
 
         Args:
@@ -207,7 +206,7 @@ class IBKRService:
         option_type: str,
         strike: Decimal,
         expiration: datetime,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Fetch Greeks for a specific option position.
 
         Args:

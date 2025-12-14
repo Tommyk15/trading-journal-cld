@@ -1,7 +1,6 @@
 """Service for managing executions - syncing from IBKR to database."""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,8 +23,8 @@ class ExecutionService:
     async def sync_from_ibkr(
         self,
         days_back: int = 7,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        host: str | None = None,
+        port: int | None = None,
     ) -> dict:
         """Sync executions from IBKR to database.
 
@@ -91,7 +90,7 @@ class ExecutionService:
         await self.session.flush()
         return execution
 
-    async def get_by_exec_id(self, exec_id: str) -> Optional[Execution]:
+    async def get_by_exec_id(self, exec_id: str) -> Execution | None:
         """Get execution by exec_id.
 
         Args:
@@ -104,7 +103,7 @@ class ExecutionService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_id(self, execution_id: int) -> Optional[Execution]:
+    async def get_by_id(self, execution_id: int) -> Execution | None:
         """Get execution by database ID.
 
         Args:
@@ -119,9 +118,9 @@ class ExecutionService:
 
     async def list_executions(
         self,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Execution]:
@@ -177,9 +176,9 @@ class ExecutionService:
         self,
         unassigned_only: bool = False,
         opens_only: bool = False,
-        underlying: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        underlying: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[Execution], int]:

@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,12 +17,12 @@ class ExecutionBase(BaseModel):
     security_type: str = Field(..., description="Security type (OPT, STK)", max_length=10)
     exchange: str = Field(..., description="Exchange", max_length=20)
     currency: str = Field(default="USD", description="Currency", max_length=3)
-    option_type: Optional[str] = Field(None, description="Option type (C or P)", max_length=1)
-    strike: Optional[Decimal] = Field(None, description="Strike price")
-    expiration: Optional[datetime] = Field(None, description="Expiration date")
-    multiplier: Optional[int] = Field(None, description="Contract multiplier")
+    option_type: str | None = Field(None, description="Option type (C or P)", max_length=1)
+    strike: Decimal | None = Field(None, description="Strike price")
+    expiration: datetime | None = Field(None, description="Expiration date")
+    multiplier: int | None = Field(None, description="Contract multiplier")
     side: str = Field(..., description="Side (BOT or SLD)", max_length=10)
-    open_close_indicator: Optional[str] = Field(None, description="Open/Close indicator (O or C)", max_length=1)
+    open_close_indicator: str | None = Field(None, description="Open/Close indicator (O or C)", max_length=1)
     quantity: int = Field(..., description="Quantity executed")
     price: Decimal = Field(..., description="Execution price")
     commission: Decimal = Field(default=Decimal("0.00"), description="Commission paid")
@@ -43,7 +42,7 @@ class ExecutionResponse(ExecutionBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Database ID")
-    trade_id: Optional[int] = Field(None, description="Associated trade ID")
+    trade_id: int | None = Field(None, description="Associated trade ID")
     created_at: datetime = Field(..., description="Record creation timestamp")
 
 
@@ -60,8 +59,8 @@ class ExecutionSyncRequest(BaseModel):
     """Schema for IBKR sync request."""
 
     days_back: int = Field(default=7, ge=1, le=30, description="Days to look back")
-    host: Optional[str] = Field(None, description="IBKR host override")
-    port: Optional[int] = Field(None, description="IBKR port override")
+    host: str | None = Field(None, description="IBKR host override")
+    port: int | None = Field(None, description="IBKR port override")
 
 
 class ExecutionSyncResponse(BaseModel):

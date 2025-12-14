@@ -1,6 +1,6 @@
 """Tests for Phase 2 features - Greeks, rolls, analytics, performance, calendar."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -74,12 +74,12 @@ async def test_greeks_service_get_latest(db_session: AsyncSession):
 
     greeks1 = Greeks(
         position_id=position.id,
-        timestamp=datetime.now(timezone.utc) - timedelta(hours=2),
+        timestamp=datetime.now(UTC) - timedelta(hours=2),
         delta=Decimal("-0.30"),
     )
     greeks2 = Greeks(
         position_id=position.id,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         delta=Decimal("-0.35"),
     )
 
@@ -97,7 +97,7 @@ async def test_greeks_service_get_latest(db_session: AsyncSession):
 async def test_roll_detection_service(db_session: AsyncSession):
     """Test roll detection between trades."""
     # Create two trades that look like a roll
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     trade1 = Trade(
         underlying="SPY",
@@ -150,8 +150,8 @@ async def test_analytics_service_win_rate(db_session: AsyncSession):
             underlying="SPY",
             strategy_type="Single",
             status="CLOSED",
-            opened_at=datetime.now(timezone.utc) - timedelta(days=i),
-            closed_at=datetime.now(timezone.utc) - timedelta(days=i-1),
+            opened_at=datetime.now(UTC) - timedelta(days=i),
+            closed_at=datetime.now(UTC) - timedelta(days=i-1),
             realized_pnl=Decimal("100.00") if i % 2 == 0 else Decimal("-50.00"),
             unrealized_pnl=Decimal("0.00"),
             total_pnl=Decimal("100.00") if i % 2 == 0 else Decimal("-50.00"),
@@ -190,8 +190,8 @@ async def test_analytics_service_strategy_breakdown(db_session: AsyncSession):
                 underlying="SPY",
                 strategy_type=strategy,
                 status="CLOSED",
-                opened_at=datetime.now(timezone.utc) - timedelta(days=i*3+j),
-                closed_at=datetime.now(timezone.utc) - timedelta(days=i*3+j-1),
+                opened_at=datetime.now(UTC) - timedelta(days=i*3+j),
+                closed_at=datetime.now(UTC) - timedelta(days=i*3+j-1),
                 realized_pnl=Decimal(str((i + 1) * 50)),
                 unrealized_pnl=Decimal("0.00"),
                 total_pnl=Decimal(str((i + 1) * 50)),
@@ -226,8 +226,8 @@ async def test_performance_metrics_cumulative_pnl(db_session: AsyncSession):
             underlying="SPY",
             strategy_type="Single",
             status="CLOSED",
-            opened_at=datetime.now(timezone.utc) - timedelta(days=5-i),
-            closed_at=datetime.now(timezone.utc) - timedelta(days=4-i),
+            opened_at=datetime.now(UTC) - timedelta(days=5-i),
+            closed_at=datetime.now(UTC) - timedelta(days=4-i),
             realized_pnl=Decimal(str(100 + i * 50)),
             unrealized_pnl=Decimal("0.00"),
             total_pnl=Decimal(str(100 + i * 50)),
@@ -261,8 +261,8 @@ async def test_performance_metrics_drawdown(db_session: AsyncSession):
             underlying="SPY",
             strategy_type="Single",
             status="CLOSED",
-            opened_at=datetime.now(timezone.utc) - timedelta(days=5),
-            closed_at=datetime.now(timezone.utc) - timedelta(days=4),
+            opened_at=datetime.now(UTC) - timedelta(days=5),
+            closed_at=datetime.now(UTC) - timedelta(days=4),
             realized_pnl=Decimal("100.00"),  # Cumulative: 100
             unrealized_pnl=Decimal("0.00"),
             total_pnl=Decimal("100.00"),
@@ -276,8 +276,8 @@ async def test_performance_metrics_drawdown(db_session: AsyncSession):
             underlying="SPY",
             strategy_type="Single",
             status="CLOSED",
-            opened_at=datetime.now(timezone.utc) - timedelta(days=4),
-            closed_at=datetime.now(timezone.utc) - timedelta(days=3),
+            opened_at=datetime.now(UTC) - timedelta(days=4),
+            closed_at=datetime.now(UTC) - timedelta(days=3),
             realized_pnl=Decimal("100.00"),  # Cumulative: 200
             unrealized_pnl=Decimal("0.00"),
             total_pnl=Decimal("100.00"),
@@ -291,8 +291,8 @@ async def test_performance_metrics_drawdown(db_session: AsyncSession):
             underlying="SPY",
             strategy_type="Single",
             status="CLOSED",
-            opened_at=datetime.now(timezone.utc) - timedelta(days=3),
-            closed_at=datetime.now(timezone.utc) - timedelta(days=2),
+            opened_at=datetime.now(UTC) - timedelta(days=3),
+            closed_at=datetime.now(UTC) - timedelta(days=2),
             realized_pnl=Decimal("-150.00"),  # Cumulative: 50 (drawdown!)
             unrealized_pnl=Decimal("0.00"),
             total_pnl=Decimal("-150.00"),
@@ -320,7 +320,7 @@ async def test_performance_metrics_drawdown(db_session: AsyncSession):
 async def test_calendar_service_upcoming_expirations(db_session: AsyncSession):
     """Test upcoming expirations retrieval."""
     # Create positions with different expirations
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     positions = [
         Position(
             trade_id=1,

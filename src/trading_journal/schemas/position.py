@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class PositionSyncRequest(BaseModel):
     """Request to sync positions from IBKR."""
 
-    host: Optional[str] = Field(None, description="IBKR host (optional)")
-    port: Optional[int] = Field(None, description="IBKR port (optional)")
+    host: str | None = Field(None, description="IBKR host (optional)")
+    port: int | None = Field(None, description="IBKR port (optional)")
 
 
 class PositionSyncResponse(BaseModel):
@@ -32,12 +31,12 @@ class PositionResponse(BaseModel):
     id: int
     trade_id: int
     underlying: str
-    option_type: Optional[str]
-    strike: Optional[Decimal]
-    expiration: Optional[datetime]
+    option_type: str | None
+    strike: Decimal | None
+    expiration: datetime | None
     quantity: int
     avg_cost: Decimal
-    current_price: Optional[Decimal]
+    current_price: Decimal | None
     unrealized_pnl: Decimal
     created_at: datetime
     updated_at: datetime

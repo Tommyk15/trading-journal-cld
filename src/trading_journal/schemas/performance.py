@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date as date_type
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -60,7 +59,7 @@ class DrawdownAnalysis(BaseModel):
 class SharpeRatioAnalysis(BaseModel):
     """Sharpe ratio and risk-adjusted metrics."""
 
-    sharpe_ratio: Optional[float] = Field(None, description="Sharpe ratio")
+    sharpe_ratio: float | None = Field(None, description="Sharpe ratio")
     average_daily_return: Decimal = Field(..., description="Average daily return")
     daily_volatility: Decimal = Field(..., description="Daily volatility (std dev)")
     annualized_return: Decimal = Field(..., description="Annualized return")
@@ -101,5 +100,5 @@ class EquityCurveSummary(BaseModel):
     ending_equity: Decimal = Field(..., description="Ending equity")
     total_return: Decimal = Field(..., description="Total return")
     data_points: int = Field(..., description="Number of data points in curve")
-    first_trade_date: Optional[datetime] = Field(None, description="Date of first trade")
-    last_trade_date: Optional[datetime] = Field(None, description="Date of last trade")
+    first_trade_date: datetime | None = Field(None, description="Date of first trade")
+    last_trade_date: datetime | None = Field(None, description="Date of last trade")

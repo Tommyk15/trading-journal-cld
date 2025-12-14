@@ -1,15 +1,12 @@
 """Trade service for manual trade operations."""
 
-from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
 from trading_journal.models.trade import Trade
-from trading_journal.services.trade_grouping_service import TradeGroupingService
 
 
 class TradeService:
@@ -27,8 +24,8 @@ class TradeService:
         self,
         execution_ids: list[int],
         strategy_type: str,
-        notes: Optional[str] = None,
-        tags: Optional[str] = None,
+        notes: str | None = None,
+        tags: str | None = None,
         auto_match_closes: bool = True,
     ) -> Trade:
         """Create a trade from manually selected executions.
@@ -193,9 +190,9 @@ class TradeService:
     async def update_trade_executions(
         self,
         trade_id: int,
-        add_ids: Optional[list[int]] = None,
-        remove_ids: Optional[list[int]] = None,
-    ) -> Optional[Trade]:
+        add_ids: list[int] | None = None,
+        remove_ids: list[int] | None = None,
+    ) -> Trade | None:
         """Add or remove executions from an existing trade.
 
         Args:
@@ -304,7 +301,7 @@ class TradeService:
             raise ValueError(f"Trades not found: {missing}")
 
         # Verify all trades have the same underlying
-        underlyings = set(t.underlying for t in trades)
+        underlyings = {t.underlying for t in trades}
         if len(underlyings) > 1:
             raise ValueError(f"Cannot merge trades with different underlyings: {underlyings}")
 
@@ -381,7 +378,7 @@ class TradeService:
 
     async def suggest_grouping(
         self,
-        execution_ids: Optional[list[int]] = None,
+        execution_ids: list[int] | None = None,
     ) -> list[dict]:
         """Run auto-grouping algorithm and return suggestions without saving.
 
@@ -434,7 +431,7 @@ class TradeService:
         for exec in executions:
             by_underlying[exec.underlying].append(exec)
 
-        for underlying, execs in by_underlying.items():
+        for _underlying, execs in by_underlying.items():
             # Sort chronologically
             sorted_execs = sorted(execs, key=lambda e: e.execution_time)
 
@@ -598,7 +595,7 @@ class TradeService:
             raise ValueError("Cannot calculate metrics for empty execution list")
 
         # Get underlying (should all be same)
-        underlyings = set(e.underlying for e in executions)
+        underlyings = {e.underlying for e in executions}
         if len(underlyings) > 1:
             raise ValueError(f"Executions have multiple underlyings: {underlyings}")
         underlying = executions[0].underlying
@@ -723,11 +720,11 @@ class TradeService:
 
         # Use opening position for classification
         legs = {k: v for k, v in opening_position.items() if v != 0}
-        num_legs = len(opening_position)
+        len(opening_position)
 
         if len(legs) == 0:
             # Fallback to counting unique leg keys
-            all_legs = set(self._get_leg_key(e) for e in executions)
+            all_legs = {self._get_leg_key(e) for e in executions}
             if len(all_legs) == 1:
                 return "Single"
             return f"{len(all_legs)}-Leg Complex"
