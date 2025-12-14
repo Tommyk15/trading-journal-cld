@@ -303,45 +303,67 @@ class PositionStateMachine:
                 del self.open_trades[trade_key]
                 self.last_trade_close_time = exec_time
 
-        # Process opening executions - create new trade(s)
+        # Process opening executions - create new trade(s) or add to existing
         if opening_execs:
             opening_deltas = self._calculate_deltas(opening_execs)
 
-            # Check if this is a roll or assignment (opening new legs right after closing)
-            is_roll = False
-            is_assignment = False
+            # Check if there's an existing open trade with overlapping legs
+            existing_trade_key = None
+            for trade_key in self.open_trades:
+                if opening_legs & trade_key:  # Any overlap
+                    existing_trade_key = trade_key
+                    break
 
-            if bool(closing_execs) and closing_legs.isdisjoint(opening_legs):
-                # Determine if this is a roll (option -> option) or assignment (option -> stock)
-                closing_has_options = any(leg != "STK" for leg in closing_legs)
-                opening_has_stock = "STK" in opening_legs
-                opening_has_options = any(leg != "STK" for leg in opening_legs)
+            if existing_trade_key is not None:
+                # Add to existing trade (continuation of same position)
+                existing_trade = self.open_trades[existing_trade_key]
+                for exec in opening_execs:
+                    existing_trade.add_execution(exec)
 
-                if closing_has_options and opening_has_stock and not opening_has_options:
-                    # Option closed, stock opened = Assignment (put assigned or call exercised)
-                    is_assignment = True
-                elif closing_has_options and opening_has_options:
-                    # Option closed, option opened = Roll
-                    is_roll = True
+                # Update the trade key to include new legs if any
+                new_key = existing_trade_key | opening_legs
+                if new_key != existing_trade_key:
+                    self.open_trades[new_key] = self.open_trades.pop(existing_trade_key)
 
-            new_trade = TradeGroup(underlying=self.underlying)
-            if is_roll:
-                new_trade.roll_type = "ROLL"
-            if is_assignment:
-                new_trade.is_assignment = True
+                # Apply opening deltas to position
+                self._apply_deltas(opening_deltas, opening_execs)
+            else:
+                # No existing trade - create new one
+                # Check if this is a roll or assignment (opening new legs right after closing)
+                is_roll = False
+                is_assignment = False
 
-            for exec in opening_execs:
-                new_trade.add_execution(exec)
+                if bool(closing_execs) and closing_legs.isdisjoint(opening_legs):
+                    # Determine if this is a roll (option -> option) or assignment (option -> stock)
+                    closing_has_options = any(leg != "STK" for leg in closing_legs)
+                    opening_has_stock = "STK" in opening_legs
+                    opening_has_options = any(leg != "STK" for leg in opening_legs)
 
-            # Record opening position
-            for leg, delta in opening_deltas.items():
-                new_trade.opening_position[leg] = delta
+                    if closing_has_options and opening_has_stock and not opening_has_options:
+                        # Option closed, stock opened = Assignment (put assigned or call exercised)
+                        is_assignment = True
+                    elif closing_has_options and opening_has_options:
+                        # Option closed, option opened = Roll
+                        is_roll = True
 
-            # Apply opening deltas to position
-            self._apply_deltas(opening_deltas, opening_execs)
+                new_trade = TradeGroup(underlying=self.underlying)
+                if is_roll:
+                    new_trade.roll_type = "ROLL"
+                if is_assignment:
+                    new_trade.is_assignment = True
 
-            # Store as open trade
-            self.open_trades[opening_legs] = new_trade
+                for exec in opening_execs:
+                    new_trade.add_execution(exec)
+
+                # Record opening position
+                for leg, delta in opening_deltas.items():
+                    new_trade.opening_position[leg] = delta
+
+                # Apply opening deltas to position
+                self._apply_deltas(opening_deltas, opening_execs)
+
+                # Store as open trade
+                self.open_trades[opening_legs] = new_trade
 
     def _find_matching_trade(self, group_legs: frozenset[str]) -> Optional[tuple[frozenset[str], TradeGroup]]:
         """Find an open trade that matches the given legs.
