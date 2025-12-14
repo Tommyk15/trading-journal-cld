@@ -59,7 +59,7 @@ export default function CalendarPage() {
       let hasMore = true;
 
       while (hasMore) {
-        const data: any = await api.trades.list({ limit: batchSize, offset });
+        const data: any = await api.trades.list({ limit: batchSize, skip: offset });
         const batch = data.trades || [];
         allTrades = [...allTrades, ...batch];
 
