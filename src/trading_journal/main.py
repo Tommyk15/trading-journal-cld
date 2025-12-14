@@ -13,6 +13,7 @@ from trading_journal.api.routes import (
     performance,
     positions,
     rolls,
+    splits,
     trades,
 )
 from trading_journal.config import get_settings
@@ -55,6 +56,7 @@ app.include_router(rolls.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(performance.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
+app.include_router(splits.router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -4,6 +4,7 @@ This module uses a position state machine approach to correctly identify trade b
 1. Tracks cumulative position state across all executions
 2. Detects when positions open, close, roll, or adjust
 3. Groups executions into logical trades with proper strategy classification
+4. Detects stock splits that may affect position tracking
 """
 
 from collections import defaultdict
@@ -20,6 +21,7 @@ from trading_journal.services.position_state_machine import (
     TradeGroup,
     classify_strategy_from_opening,
 )
+from trading_journal.services.split_detection_service import SplitDetectionService
 
 
 class TradeLedger:
@@ -695,7 +697,43 @@ class TradeGroupingService:
                     prev_trade = trade
 
         await self.session.commit()
+
+        # Run split detection for stock trades
+        split_report = await self._check_for_stock_splits()
+        stats["split_issues_detected"] = split_report["issues_found"]
+        stats["split_issues_auto_fixed"] = split_report.get("auto_fixed", 0)
+
         return stats
+
+    async def _check_for_stock_splits(self) -> dict:
+        """Check for stock split issues and auto-fix where possible.
+
+        Returns:
+            Report of split issues found and fixed
+        """
+        split_service = SplitDetectionService(self.session)
+        report = await split_service.check_and_report_splits()
+
+        auto_fixed = 0
+        for issue in report.get("details", []):
+            if issue.get("recommendation") == "Position should be CLOSED":
+                # Find the trade for this underlying that's still OPEN
+                stmt = select(Trade).where(
+                    Trade.underlying == issue["underlying"],
+                    Trade.status == "OPEN",
+                    Trade.strategy_type.in_(["Long Stock", "Short Stock"]),
+                )
+                result = await self.session.execute(stmt)
+                trade = result.scalar_one_or_none()
+
+                if trade:
+                    # Auto-fix using the split service
+                    fix_result = await split_service.fix_trade_with_split(trade.id)
+                    if fix_result.get("status") == "CLOSED":
+                        auto_fixed += 1
+
+        report["auto_fixed"] = auto_fixed
+        return report
 
     async def _create_trade_from_group(self, group: TradeGroup) -> Trade | None:
         """Create a Trade model from a TradeGroup.
