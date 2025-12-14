@@ -65,6 +65,8 @@ class TradeGroup:
     status: str = "OPEN"
     parent_trade_id: Optional[int] = None
     roll_type: Optional[str] = None  # "ROLL" or "ADJUST" or None
+    is_assignment: bool = False  # True if this trade is from option assignment/exercise
+    assigned_from_trade_id: Optional[int] = None  # ID of the option trade that was assigned
 
     def add_execution(self, exec: Execution) -> None:
         """Add execution to this trade group."""
@@ -305,12 +307,28 @@ class PositionStateMachine:
         if opening_execs:
             opening_deltas = self._calculate_deltas(opening_execs)
 
-            # Check if this is a roll (opening new legs right after closing)
-            is_roll = bool(closing_execs) and closing_legs.isdisjoint(opening_legs)
+            # Check if this is a roll or assignment (opening new legs right after closing)
+            is_roll = False
+            is_assignment = False
+
+            if bool(closing_execs) and closing_legs.isdisjoint(opening_legs):
+                # Determine if this is a roll (option -> option) or assignment (option -> stock)
+                closing_has_options = any(leg != "STK" for leg in closing_legs)
+                opening_has_stock = "STK" in opening_legs
+                opening_has_options = any(leg != "STK" for leg in opening_legs)
+
+                if closing_has_options and opening_has_stock and not opening_has_options:
+                    # Option closed, stock opened = Assignment (put assigned or call exercised)
+                    is_assignment = True
+                elif closing_has_options and opening_has_options:
+                    # Option closed, option opened = Roll
+                    is_roll = True
 
             new_trade = TradeGroup(underlying=self.underlying)
             if is_roll:
                 new_trade.roll_type = "ROLL"
+            if is_assignment:
+                new_trade.is_assignment = True
 
             for exec in opening_execs:
                 new_trade.add_execution(exec)

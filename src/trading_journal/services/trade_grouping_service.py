@@ -189,9 +189,10 @@ class TradeGroupingService:
 
         This algorithm:
         1. Groups near-simultaneous executions (multi-leg orders)
-        2. Tracks cumulative position state across all executions
-        3. Detects trade boundaries when position structure changes
-        4. Handles rolls, adjustments, and partial closes
+        2. Separates closing vs opening executions using open_close_indicator
+        3. Tracks cumulative position state across all executions
+        4. Detects trade boundaries when position structure changes
+        5. Handles rolls by properly assigning closing executions to existing trades
 
         Args:
             underlying: Underlying symbol
@@ -212,78 +213,97 @@ class TradeGroupingService:
         execution_groups = self._group_simultaneous_executions(sorted_execs)
 
         # Step 2: Process groups with position state machine
+        # Track multiple open trades by their leg keys
+        open_trades: dict[frozenset, TradeLedger] = {}  # leg_keys -> TradeLedger
         cumulative_position: dict[str, int] = {}  # leg_key -> net quantity
-        current_trade: Optional[TradeLedger] = None
-        current_trade_legs: set[str] = set()
 
         for group in execution_groups:
-            # Get legs affected by this execution group
-            group_legs = {self._get_leg_key_from_exec(e) for e in group}
+            # Separate closing vs opening executions
+            closing_execs = []
+            opening_execs = []
 
-            # Determine what this group does to our position
-            if current_trade is None:
-                # No active trade - this group opens a new trade
-                current_trade = TradeLedger(underlying)
-                for exec in group:
-                    current_trade.add_execution(exec)
+            for exec in group:
+                leg_key = self._get_leg_key_from_exec(exec)
+                current_qty = cumulative_position.get(leg_key, 0)
+
+                if exec.open_close_indicator == 'C':
+                    closing_execs.append(exec)
+                elif exec.open_close_indicator == 'O':
+                    opening_execs.append(exec)
+                elif current_qty != 0:
+                    # Has existing position - check if this reduces it
+                    delta = exec.quantity if exec.side == "BOT" else -exec.quantity
+                    if (current_qty > 0 and delta < 0) or (current_qty < 0 and delta > 0):
+                        closing_execs.append(exec)
+                    else:
+                        opening_execs.append(exec)
+                else:
+                    # No position, must be opening
+                    opening_execs.append(exec)
+
+            # Process closing executions - add to existing trades
+            for exec in closing_execs:
+                leg_key = self._get_leg_key_from_exec(exec)
+
+                # Find existing trade that has this leg
+                matching_trade_key = None
+                for trade_key in open_trades:
+                    if leg_key in trade_key:
+                        matching_trade_key = trade_key
+                        break
+
+                if matching_trade_key is not None:
+                    # Add to existing trade
+                    open_trades[matching_trade_key].add_execution(exec)
                     self._update_cumulative_position(cumulative_position, exec)
-                current_trade_legs = group_legs
 
-            elif group_legs.issubset(current_trade_legs):
-                # All legs in this group are part of the current trade
-                for exec in group:
-                    current_trade.add_execution(exec)
-                    self._update_cumulative_position(cumulative_position, exec)
+                    # Check if trade is now closed
+                    if self._trade_legs_are_flat(set(matching_trade_key), cumulative_position):
+                        trade = await self._save_trade_from_ledger(
+                            open_trades[matching_trade_key], is_closed=True
+                        )
+                        if trade:
+                            trades_created += 1
+                        del open_trades[matching_trade_key]
+                else:
+                    # No matching trade - treat as opening (orphaned close)
+                    opening_execs.append(exec)
 
-                # Check if current trade is now complete (all legs flat)
-                if self._trade_legs_are_flat(current_trade_legs, cumulative_position):
-                    # Trade complete - save it
-                    trade = await self._save_trade_from_ledger(current_trade, is_closed=True)
-                    if trade:
-                        trades_created += 1
-                    current_trade = None
-                    current_trade_legs = set()
-
-            elif group_legs.isdisjoint(current_trade_legs):
-                # Completely different legs - new trade (this is a roll or new position)
-                # Save current trade (might still be open)
-                trade = await self._save_trade_from_ledger(
-                    current_trade,
-                    is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
+            # Process opening executions - create new trade or add to existing
+            if opening_execs:
+                opening_legs = frozenset(
+                    self._get_leg_key_from_exec(e) for e in opening_execs
                 )
-                if trade:
-                    trades_created += 1
 
-                # Start new trade
-                current_trade = TradeLedger(underlying)
-                for exec in group:
-                    current_trade.add_execution(exec)
-                    self._update_cumulative_position(cumulative_position, exec)
-                current_trade_legs = group_legs
+                # Check if there's an existing trade with overlapping legs
+                matching_trade_key = None
+                for trade_key in open_trades:
+                    if opening_legs & trade_key:  # Any overlap
+                        matching_trade_key = trade_key
+                        break
 
-            else:
-                # Partial overlap - this is an adjustment or complex scenario
-                # For now, treat as closing current trade and opening new one
-                trade = await self._save_trade_from_ledger(
-                    current_trade,
-                    is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
-                )
-                if trade:
-                    trades_created += 1
+                if matching_trade_key is not None:
+                    # Add to existing trade and update its leg key
+                    for exec in opening_execs:
+                        open_trades[matching_trade_key].add_execution(exec)
+                        self._update_cumulative_position(cumulative_position, exec)
 
-                # Start new trade with this group
-                current_trade = TradeLedger(underlying)
-                for exec in group:
-                    current_trade.add_execution(exec)
-                    self._update_cumulative_position(cumulative_position, exec)
-                current_trade_legs = group_legs
+                    # Update trade key to include new legs
+                    new_key = matching_trade_key | opening_legs
+                    if new_key != matching_trade_key:
+                        open_trades[new_key] = open_trades.pop(matching_trade_key)
+                else:
+                    # Create new trade
+                    new_trade = TradeLedger(underlying)
+                    for exec in opening_execs:
+                        new_trade.add_execution(exec)
+                        self._update_cumulative_position(cumulative_position, exec)
+                    open_trades[opening_legs] = new_trade
 
-        # Handle any remaining open trade
-        if current_trade:
-            trade = await self._save_trade_from_ledger(
-                current_trade,
-                is_closed=self._trade_legs_are_flat(current_trade_legs, cumulative_position)
-            )
+        # Handle any remaining open trades
+        for trade_key, ledger in open_trades.items():
+            is_closed = self._trade_legs_are_flat(set(trade_key), cumulative_position)
+            trade = await self._save_trade_from_ledger(ledger, is_closed=is_closed)
             if trade:
                 trades_created += 1
 
@@ -648,8 +668,15 @@ class TradeGroupingService:
                     all_trades.append(trade)
                     stats["trades_created"] += 1
 
-                    # Handle roll linking
-                    if group.roll_type == "ROLL" and prev_trade:
+                    # Handle assignment linking (option -> stock)
+                    if group.is_assignment and prev_trade:
+                        trade.is_assignment = True
+                        trade.assigned_from_trade_id = prev_trade.id
+                        # Don't mark as roll - assignments are distinct from rolls
+                        current_chain_id = None
+
+                    # Handle roll linking (option -> option)
+                    elif group.roll_type == "ROLL" and prev_trade:
                         trade.is_roll = True
                         trade.rolled_from_trade_id = prev_trade.id
                         prev_trade.rolled_to_trade_id = trade.id
@@ -718,6 +745,7 @@ class TradeGroupingService:
             leg_keys.add(leg_key)
 
         # Create trade
+        # Note: is_roll should not be set for assignments
         trade = Trade(
             underlying=group.underlying,
             strategy_type=strategy_type,
@@ -732,7 +760,8 @@ class TradeGroupingService:
             total_commission=total_commission,
             num_legs=len(leg_keys),
             num_executions=len(executions),
-            is_roll=group.roll_type == "ROLL",
+            is_roll=group.roll_type == "ROLL" and not group.is_assignment,
+            is_assignment=group.is_assignment,
         )
 
         self.session.add(trade)

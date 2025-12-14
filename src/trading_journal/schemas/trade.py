@@ -59,6 +59,8 @@ class TradeResponse(TradeBase):
     is_roll: bool = Field(..., description="Whether this is a roll")
     rolled_from_trade_id: Optional[int] = Field(None, description="Rolled from trade ID")
     rolled_to_trade_id: Optional[int] = Field(None, description="Rolled to trade ID")
+    is_assignment: bool = Field(False, description="Whether this is from option assignment")
+    assigned_from_trade_id: Optional[int] = Field(None, description="Option trade that was assigned")
     created_at: datetime = Field(..., description="Record creation timestamp")
     updated_at: datetime = Field(..., description="Record update timestamp")
 

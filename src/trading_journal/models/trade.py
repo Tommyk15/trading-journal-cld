@@ -61,6 +61,11 @@ class Trade(Base):
     roll_chain_id: Mapped[int | None] = mapped_column(Integer, index=True)
     # roll_chain_id groups all trades in a roll sequence (shared ID)
 
+    # Assignment tracking (option assigned/exercised to stock)
+    is_assignment: Mapped[bool] = mapped_column(default=False, nullable=False)
+    assigned_from_trade_id: Mapped[int | None] = mapped_column(Integer)
+    # assigned_from_trade_id links to the option trade that was assigned
+
     def __repr__(self) -> str:
         """String representation."""
         return (

@@ -17,6 +17,7 @@ interface OpenTrade {
   opening_cost: string;
   total_commission: string;
   is_roll: boolean;
+  is_assignment: boolean;
 }
 
 interface TradeExecution {
@@ -396,7 +397,12 @@ export default function PositionsPage() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                             {trade.strategy_type}
-                            {trade.is_roll && (
+                            {trade.is_assignment && (
+                              <span className="ml-2 px-1.5 py-0.5 text-xs bg-orange-100 text-orange-700 rounded">
+                                ASSIGN
+                              </span>
+                            )}
+                            {trade.is_roll && !trade.is_assignment && (
                               <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">
                                 ROLL
                               </span>
