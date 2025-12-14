@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RollDetectionRequest(BaseModel):
@@ -39,8 +39,7 @@ class RollChainTrade(BaseModel):
     rolled_from_trade_id: Optional[int]
     rolled_to_trade_id: Optional[int]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RollChainResponse(BaseModel):
