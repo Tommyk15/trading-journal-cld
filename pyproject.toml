@@ -78,6 +78,9 @@ addopts = [
     "--cov=trading_journal",
     "--cov-report=term-missing",
 ]
+filterwarnings = [
+    "ignore:There is no current event loop:DeprecationWarning:eventkit",
+]
 
 [tool.coverage.run]
 source = ["src"]
