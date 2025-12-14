@@ -10,12 +10,12 @@ interface HeaderProps {
 
 export function Header({ title, subtitle, actions }: HeaderProps) {
   return (
-    <div className="border-b border-gray-200 bg-white px-6 py-4">
+    <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-6 py-4 transition-colors">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{title}</h1>
           {subtitle && (
-            <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
           )}
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
@@ -44,7 +44,7 @@ export function ActionButton({
   const variantClasses =
     variant === 'primary'
       ? 'bg-blue-600 text-white hover:bg-blue-700'
-      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50';
+      : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600';
 
   return (
     <button

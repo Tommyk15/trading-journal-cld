@@ -354,11 +354,11 @@ export default function TradesPage() {
 
   if (loading) {
     return (
-      <div>
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
         <Header title="Trades" subtitle="View your complete trade history" />
         <div className="p-6">
           <div className="animate-pulse">
-            <div className="h-96 rounded-lg bg-gray-200" />
+            <div className="h-96 rounded-lg bg-gray-200 dark:bg-gray-700" />
           </div>
         </div>
       </div>
@@ -366,7 +366,7 @@ export default function TradesPage() {
   }
 
   return (
-    <div>
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
       <Header title="Trades" subtitle="View your complete trade history" />
 
       <div className="p-6 space-y-6">
@@ -377,7 +377,7 @@ export default function TradesPage() {
             onChange={(e) =>
               setFilters({ ...filters, strategy: e.target.value })
             }
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+            className="block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
           >
             <option value="">All Strategies</option>
             <option value="iron_condor">Iron Condor</option>
@@ -399,7 +399,7 @@ export default function TradesPage() {
             }}
             onBlur={() => setFilters({ ...filters, underlying_symbol: underlyingInput })}
             placeholder="Underlying (press Enter)"
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+            className="block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm placeholder-gray-400 dark:placeholder-gray-500"
           />
 
           <select
@@ -407,7 +407,7 @@ export default function TradesPage() {
             onChange={(e) =>
               setFilters({ ...filters, status: e.target.value })
             }
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+            className="block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
           >
             <option value="">All Status</option>
             <option value="OPEN">Open</option>
@@ -427,7 +427,7 @@ export default function TradesPage() {
 
         {/* Merge Error */}
         {mergeError && (
-          <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
+          <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-red-800 dark:text-red-200 text-sm">
             <AlertCircle className="h-5 w-5 flex-shrink-0" />
             {mergeError}
           </div>
@@ -435,11 +435,11 @@ export default function TradesPage() {
 
         {/* Selection Info */}
         {selectedTradeIds.size > 0 && (
-          <div className="flex items-center gap-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm">
+          <div className="flex items-center gap-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg text-blue-800 dark:text-blue-200 text-sm">
             <span>{selectedTradeIds.size} trade{selectedTradeIds.size !== 1 ? 's' : ''} selected</span>
             <button
               onClick={() => setSelectedTradeIds(new Set())}
-              className="text-blue-600 hover:text-blue-800 underline"
+              className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 underline"
             >
               Clear selection
             </button>
@@ -448,26 +448,26 @@ export default function TradesPage() {
 
         {/* Summary Cards */}
         <div className="grid gap-6 md:grid-cols-4">
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Total Trades</h3>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Trades</h3>
+            <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">
               {trades.length}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Open Trades</h3>
-            <p className="mt-2 text-3xl font-bold text-blue-600">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Open Trades</h3>
+            <p className="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
               {openTrades}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Closed Trades</h3>
-            <p className="mt-2 text-3xl font-bold text-gray-600">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Closed Trades</h3>
+            <p className="mt-2 text-3xl font-bold text-gray-600 dark:text-gray-400">
               {closedTrades}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Total P&L</h3>
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Total P&L</h3>
             <p className={`mt-2 text-3xl font-bold ${getPnlColor(totalPnl)}`}>
               {formatCurrency(totalPnl)}
             </p>
@@ -475,38 +475,38 @@ export default function TradesPage() {
         </div>
 
         {/* Trades Table */}
-        <div className="rounded-lg bg-white shadow overflow-hidden">
+        <div className="rounded-lg bg-white dark:bg-gray-800 shadow overflow-hidden transition-colors">
           <div className="overflow-x-auto max-h-[calc(100vh-300px)] relative">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50 sticky top-0 z-10">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
                 <tr>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12">
                     <input
                       type="checkbox"
                       checked={selectedTradeIds.size === trades.length && trades.length > 0}
                       onChange={toggleSelectAll}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12"></th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticker</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strategy</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strike</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiration</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">DTE</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Commission</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">P&L</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Date</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Ticker</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Qty</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strategy</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strike</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Expiration</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">DTE</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Price</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Value</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Commission</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">P&L</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {trades.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={14} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                       No trades found matching your filters.
                     </td>
                   </tr>
@@ -548,19 +548,19 @@ export default function TradesPage() {
 
                     return (
                     <React.Fragment key={trade.id}>
-                      <tr className={`hover:bg-gray-50 ${selectedTradeIds.has(trade.id) ? 'bg-blue-50' : ''}`}>
+                      <tr className={`hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedTradeIds.has(trade.id) ? 'bg-blue-50 dark:bg-blue-900/30' : ''}`}>
                         <td className="px-4 py-3 whitespace-nowrap text-center">
                           <input
                             type="checkbox"
                             checked={selectedTradeIds.has(trade.id)}
                             onChange={() => toggleTradeSelection(trade.id)}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                           />
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
                           <button
                             onClick={() => toggleTradeExpansion(trade.id)}
-                            className="text-gray-400 hover:text-gray-600"
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                           >
                             {expandedTrades.has(trade.id) ? (
                               <ChevronDown className="h-4 w-4" />
@@ -572,40 +572,40 @@ export default function TradesPage() {
                         <td className="px-4 py-3 whitespace-nowrap">
                           <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
                             trade.status === 'CLOSED'
-                              ? 'bg-gray-100 text-gray-800'
-                              : 'bg-blue-100 text-blue-800'
+                              ? 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                              : 'bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200'
                           }`}>
                             {trade.status}
                           </span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {formatDate(trade.opened_at)}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                           {trade.underlying}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {qty}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {formatStrategyName(trade, executions)}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {strikes}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {expiration ? formatDate(expiration.toISOString()) : '-'}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {dte !== null ? dte : '-'}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {formatCurrency(netPrice)}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {formatCurrency(netValue)}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           ${totalCommission.toFixed(2)}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-sm text-right">
@@ -616,50 +616,50 @@ export default function TradesPage() {
                       </tr>
                       {expandedTrades.has(trade.id) && (
                         <tr key={`${trade.id}-executions`}>
-                          <td colSpan={14} className="px-6 py-4 bg-gray-50">
+                          <td colSpan={14} className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50">
                             {tradeExecutions[trade.id] ? (
                               <table className="min-w-full">
                                 <thead>
-                                  <tr className="border-b border-gray-300">
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Date Opened</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Date Closed</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Action</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Qty</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Type</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Strike</th>
-                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Expiration</th>
-                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Open Price</th>
-                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Close Price</th>
-                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Commission</th>
-                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Net P&L</th>
+                                  <tr className="border-b border-gray-300 dark:border-gray-600">
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Date Opened</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Date Closed</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Action</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Qty</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Type</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Strike</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Expiration</th>
+                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Open Price</th>
+                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Close Price</th>
+                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Commission</th>
+                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Net P&L</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {pairTransactions(tradeExecutions[trade.id]).map((pair: any, idx: number) => (
-                                    <tr key={idx} className="border-b border-gray-200">
-                                      <td className="px-3 py-2 text-sm text-gray-900">
+                                    <tr key={idx} className="border-b border-gray-200 dark:border-gray-600">
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
                                         {pair.dateOpened ? formatDate(pair.dateOpened.toISOString()) : '-'}
                                       </td>
-                                      <td className="px-3 py-2 text-sm text-gray-900">
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
                                         {pair.dateClosed ? formatDate(pair.dateClosed.toISOString()) :
-                                          <span className="text-blue-600 font-semibold">OPEN</span>}
+                                          <span className="text-blue-600 dark:text-blue-400 font-semibold">OPEN</span>}
                                       </td>
                                       <td className="px-3 py-2 text-sm">
-                                        <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700' : 'text-red-700'}`}>
-                                          {pair.action.includes('Long') ? '🟢' : '🔴'} {pair.action}
+                                        <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                                          {pair.action.includes('Long') ? '+' : '-'} {pair.action}
                                         </span>
                                       </td>
-                                      <td className="px-3 py-2 text-sm font-medium text-gray-900">{pair.quantity}</td>
-                                      <td className="px-3 py-2 text-sm text-gray-900">{pair.type}</td>
-                                      <td className="px-3 py-2 text-sm font-medium text-gray-900">${pair.strike}</td>
-                                      <td className="px-3 py-2 text-sm text-gray-900">{formatDate(pair.expiration)}</td>
-                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 text-right">
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">{pair.quantity}</td>
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{pair.type}</td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">${pair.strike}</td>
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{formatDate(pair.expiration)}</td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
                                         {pair.openPrice !== null ? `$${pair.openPrice.toFixed(2)}` : '-'}
                                       </td>
-                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 text-right">
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
                                         {pair.closePrice !== null ? `$${pair.closePrice.toFixed(2)}` : '-'}
                                       </td>
-                                      <td className="px-3 py-2 text-sm text-gray-900 text-right">
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
                                         ${pair.totalCommission.toFixed(2)}
                                       </td>
                                       <td className="px-3 py-2 text-sm font-semibold text-right">
@@ -671,11 +671,11 @@ export default function TradesPage() {
                                       </td>
                                     </tr>
                                   ))}
-                                  <tr className="border-t-2 border-gray-400 bg-gray-100">
-                                    <td colSpan={9} className="px-3 py-2 text-sm font-bold text-gray-900">
+                                  <tr className="border-t-2 border-gray-400 dark:border-gray-500 bg-gray-100 dark:bg-gray-600">
+                                    <td colSpan={9} className="px-3 py-2 text-sm font-bold text-gray-900 dark:text-white">
                                       TOTAL
                                     </td>
-                                    <td className="px-3 py-2 text-sm font-bold text-gray-900 text-right">
+                                    <td className="px-3 py-2 text-sm font-bold text-gray-900 dark:text-white text-right">
                                       {(() => {
                                         const pairs = pairTransactions(tradeExecutions[trade.id]);
                                         const totalCommission = pairs.reduce((sum, p) => sum + p.totalCommission, 0);
@@ -697,7 +697,7 @@ export default function TradesPage() {
                                 </tbody>
                               </table>
                             ) : (
-                              <div className="text-sm text-gray-900">Loading executions...</div>
+                              <div className="text-sm text-gray-900 dark:text-white">Loading executions...</div>
                             )}
                           </td>
                         </tr>

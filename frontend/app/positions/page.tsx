@@ -323,14 +323,14 @@ export default function PositionsPage() {
   }) {
     const isCollapsed = collapsedSections.has(sectionKey);
     const sectionCost = positions.reduce((sum, t) => sum + parseFloat(t.opening_cost || '0'), 0);
-    const bgColor = direction === 'long' ? 'bg-green-50/50' : 'bg-red-50/50';
-    const textColor = direction === 'long' ? 'text-green-700' : 'text-red-700';
-    const iconColor = direction === 'long' ? 'text-green-600' : 'text-red-600';
+    const bgColor = direction === 'long' ? 'bg-green-50/50 dark:bg-green-900/20' : 'bg-red-50/50 dark:bg-red-900/20';
+    const textColor = direction === 'long' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400';
+    const iconColor = direction === 'long' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400';
 
     if (positions.length === 0) return null;
 
     return (
-      <div className="border-t border-gray-100 first:border-t-0">
+      <div className="border-t border-gray-100 dark:border-gray-700 first:border-t-0">
         {/* Subsection Header */}
         <div
           className={`px-4 py-2 ${bgColor} flex items-center justify-between cursor-pointer`}
@@ -343,18 +343,18 @@ export default function PositionsPage() {
               <TrendingDown className={`h-4 w-4 ${iconColor}`} />
             )}
             <h3 className={`text-sm font-medium ${textColor}`}>{title}</h3>
-            <span className={`px-2 py-0.5 rounded-full bg-white/70 text-xs font-medium ${textColor}`}>
+            <span className={`px-2 py-0.5 rounded-full bg-white/70 dark:bg-gray-800/70 text-xs font-medium ${textColor}`}>
               {positions.length}
             </span>
           </div>
           <div className="flex items-center gap-4">
-            <span className={`text-sm font-medium ${sectionCost >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+            <span className={`text-sm font-medium ${sectionCost >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
               {formatCurrency(sectionCost)}
             </span>
             {isCollapsed ? (
-              <ChevronRight className="h-4 w-4 text-gray-500" />
+              <ChevronRight className="h-4 w-4 text-gray-500 dark:text-gray-400" />
             ) : (
-              <ChevronDown className="h-4 w-4 text-gray-500" />
+              <ChevronDown className="h-4 w-4 text-gray-500 dark:text-gray-400" />
             )}
           </div>
         </div>
@@ -362,23 +362,23 @@ export default function PositionsPage() {
         {/* Subsection Content */}
         {!isCollapsed && (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12"></th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticker</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strategy</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strike</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiration</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">DTE</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Commission</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Date</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Ticker</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Qty</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strategy</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strike</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Expiration</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">DTE</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Price</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Value</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Commission</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {positions.map((trade) => {
                   const executions = tradeExecutions[trade.id] || [];
                   const aggregated = aggregateExecutions(executions);
@@ -410,11 +410,11 @@ export default function PositionsPage() {
 
                   return (
                     <React.Fragment key={trade.id}>
-                      <tr className="hover:bg-gray-50">
+                      <tr className="hover:bg-gray-50 dark:hover:bg-gray-700">
                         <td className="px-4 py-2 whitespace-nowrap">
                           <button
                             onClick={() => toggleTradeExpansion(trade.id)}
-                            className="text-gray-400 hover:text-gray-600"
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                           >
                             {expandedTrades.has(trade.id) ? (
                               <ChevronDown className="h-4 w-4" />
@@ -423,50 +423,50 @@ export default function PositionsPage() {
                             )}
                           </button>
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {formatDate(trade.opened_at)}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                           {trade.underlying}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {qty}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {trade.strategy_type}
                           {trade.is_assignment && (
-                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-orange-100 text-orange-700 rounded">
+                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 rounded">
                               ASSIGN
                             </span>
                           )}
                           {trade.is_roll && !trade.is_assignment && (
-                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">
+                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded">
                               ROLL
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {strikes}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                           {expiration ? formatDate(expiration.toISOString()) : '-'}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {dte !== null ? (
-                            <span className={dte <= 7 ? 'text-red-600 font-semibold' : ''}>
+                            <span className={dte <= 7 ? 'text-red-600 dark:text-red-400 font-semibold' : ''}>
                               {dte}
                             </span>
                           ) : '-'}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           {formatCurrency(netPrice)}
                         </td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-right">
-                          <span className={netValue >= 0 ? 'text-green-600' : 'text-red-600'}>
+                          <span className={netValue >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
                             {formatCurrency(netValue)}
                           </span>
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-right">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                           ${totalComm.toFixed(2)}
                         </td>
                       </tr>
@@ -474,43 +474,43 @@ export default function PositionsPage() {
                       {/* Expanded execution details */}
                       {expandedTrades.has(trade.id) && executions.length > 0 && (
                         <tr>
-                          <td colSpan={11} className="px-6 py-4 bg-gray-50">
+                          <td colSpan={11} className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50">
                             <table className="min-w-full">
                               <thead>
-                                <tr className="border-b border-gray-300">
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Date Opened</th>
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Action</th>
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Qty</th>
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Type</th>
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Strike</th>
-                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Expiration</th>
-                                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Open Price</th>
-                                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Commission</th>
+                                <tr className="border-b border-gray-300 dark:border-gray-600">
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Date Opened</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Action</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Qty</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Type</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Strike</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">Expiration</th>
+                                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Open Price</th>
+                                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">Commission</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {pairTransactions(executions).map((pair: any, idx: number) => (
-                                  <tr key={idx} className="border-b border-gray-200">
-                                    <td className="px-3 py-2 text-sm text-gray-900">
+                                  <tr key={idx} className="border-b border-gray-200 dark:border-gray-600">
+                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
                                       {pair.dateOpened ? formatDate(pair.dateOpened.toISOString()) : '-'}
                                     </td>
                                     <td className="px-3 py-2 text-sm">
-                                      <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700' : 'text-red-700'}`}>
+                                      <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
                                         {pair.action.includes('Long') ? '+' : '-'} {pair.action}
                                       </span>
                                     </td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900">{pair.quantity}</td>
-                                    <td className="px-3 py-2 text-sm text-gray-900">{pair.type}</td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900">
+                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">{pair.quantity}</td>
+                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{pair.type}</td>
+                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">
                                       {pair.strike ? `$${pair.strike}` : '-'}
                                     </td>
-                                    <td className="px-3 py-2 text-sm text-gray-900">
+                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
                                       {pair.expiration ? formatDate(pair.expiration) : '-'}
                                     </td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 text-right">
+                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
                                       {pair.openPrice !== null ? `$${Math.abs(pair.openPrice).toFixed(2)}` : '-'}
                                     </td>
-                                    <td className="px-3 py-2 text-sm text-gray-900 text-right">
+                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
                                       ${pair.totalCommission.toFixed(2)}
                                     </td>
                                   </tr>
@@ -552,7 +552,7 @@ export default function PositionsPage() {
     const isSectionCollapsed = collapsedSections.has(category);
 
     return (
-      <div className="rounded-lg bg-white shadow overflow-hidden">
+      <div className="rounded-lg bg-white dark:bg-gray-800 shadow overflow-hidden transition-colors">
         {/* Main Section Header */}
         <div
           className={`px-4 py-3 ${color} flex items-center justify-between cursor-pointer`}
@@ -560,19 +560,19 @@ export default function PositionsPage() {
         >
           <div className="flex items-center gap-3">
             {icon}
-            <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-            <span className="px-2 py-0.5 rounded-full bg-white/50 text-sm font-medium">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
+            <span className="px-2 py-0.5 rounded-full bg-white/50 dark:bg-gray-800/50 text-sm font-medium text-gray-900 dark:text-white">
               {totalCount}
             </span>
           </div>
           <div className="flex items-center gap-4">
-            <span className={`text-sm font-medium ${sectionCost >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+            <span className={`text-sm font-medium ${sectionCost >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
               {formatCurrency(sectionCost)}
             </span>
             {isSectionCollapsed ? (
-              <ChevronRight className="h-5 w-5 text-gray-600" />
+              <ChevronRight className="h-5 w-5 text-gray-600 dark:text-gray-400" />
             ) : (
-              <ChevronDown className="h-5 w-5 text-gray-600" />
+              <ChevronDown className="h-5 w-5 text-gray-600 dark:text-gray-400" />
             )}
           </div>
         </div>
@@ -581,7 +581,7 @@ export default function PositionsPage() {
         {!isSectionCollapsed && (
           <div>
             {totalCount === 0 ? (
-              <div className="px-6 py-8 text-center text-gray-500">
+              <div className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
                 No {title.toLowerCase()} positions
               </div>
             ) : (
@@ -608,7 +608,7 @@ export default function PositionsPage() {
 
   if (loading) {
     return (
-      <div>
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
         <Header
           title="Portfolio"
           subtitle="View and manage your open positions"
@@ -616,7 +616,7 @@ export default function PositionsPage() {
         <div className="p-6">
           <div className="animate-pulse space-y-4">
             {[1, 2, 3].map(i => (
-              <div key={i} className="h-32 rounded-lg bg-gray-200" />
+              <div key={i} className="h-32 rounded-lg bg-gray-200 dark:bg-gray-700" />
             ))}
           </div>
         </div>
@@ -625,7 +625,7 @@ export default function PositionsPage() {
   }
 
   return (
-    <div>
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
       <Header
         title="Portfolio"
         subtitle="View and manage your open positions"
@@ -642,65 +642,65 @@ export default function PositionsPage() {
       <div className="p-6 space-y-6">
         {/* Summary Cards */}
         <div className="grid gap-6 md:grid-cols-4">
-          <div className="rounded-lg bg-white p-6 shadow">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
               <Layers className="h-5 w-5 text-blue-600" />
-              <h3 className="text-sm font-medium text-gray-600">Open Positions</h3>
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Open Positions</h3>
             </div>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
+            <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">
               {trades.length}
             </p>
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {uniqueUnderlyings} underlying{uniqueUnderlyings !== 1 ? 's' : ''}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
               {totalPortfolioCost >= 0 ? (
-                <TrendingUp className="h-5 w-5 text-green-600" />
+                <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
               ) : (
-                <TrendingDown className="h-5 w-5 text-red-600" />
+                <TrendingDown className="h-5 w-5 text-red-600 dark:text-red-400" />
               )}
-              <h3 className="text-sm font-medium text-gray-600">Net Cost Basis</h3>
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Net Cost Basis</h3>
             </div>
-            <p className={`mt-2 text-3xl font-bold ${totalPortfolioCost >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <p className={`mt-2 text-3xl font-bold ${totalPortfolioCost >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
               {formatCurrency(totalPortfolioCost)}
             </p>
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {totalPortfolioCost < 0 ? 'Net credit received' : 'Net debit paid'}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
-              <Briefcase className="h-5 w-5 text-gray-600" />
-              <h3 className="text-sm font-medium text-gray-600">Total Commission</h3>
+              <Briefcase className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Commission</h3>
             </div>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
+            <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">
               {formatCurrency(totalCommission)}
             </p>
           </div>
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Breakdown</h3>
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Breakdown</h3>
             <div className="mt-2 space-y-2 text-sm">
               <div className="flex justify-between items-center">
-                <span className="text-gray-500">Stocks:</span>
+                <span className="text-gray-500 dark:text-gray-400">Stocks:</span>
                 <div className="flex gap-2">
-                  <span className="text-green-600">{categorizedTrades.stocks.long.length}L</span>
-                  <span className="text-red-600">{categorizedTrades.stocks.short.length}S</span>
+                  <span className="text-green-600 dark:text-green-400">{categorizedTrades.stocks.long.length}L</span>
+                  <span className="text-red-600 dark:text-red-400">{categorizedTrades.stocks.short.length}S</span>
                 </div>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-500">Options:</span>
+                <span className="text-gray-500 dark:text-gray-400">Options:</span>
                 <div className="flex gap-2">
-                  <span className="text-green-600">{categorizedTrades.options.long.length}L</span>
-                  <span className="text-red-600">{categorizedTrades.options.short.length}S</span>
+                  <span className="text-green-600 dark:text-green-400">{categorizedTrades.options.long.length}L</span>
+                  <span className="text-red-600 dark:text-red-400">{categorizedTrades.options.short.length}S</span>
                 </div>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-500">Combos:</span>
+                <span className="text-gray-500 dark:text-gray-400">Combos:</span>
                 <div className="flex gap-2">
-                  <span className="text-green-600">{categorizedTrades.combos.long.length}L</span>
-                  <span className="text-red-600">{categorizedTrades.combos.short.length}S</span>
+                  <span className="text-green-600 dark:text-green-400">{categorizedTrades.combos.long.length}L</span>
+                  <span className="text-red-600 dark:text-red-400">{categorizedTrades.combos.short.length}S</span>
                 </div>
               </div>
             </div>
@@ -709,12 +709,12 @@ export default function PositionsPage() {
 
         {/* No positions message */}
         {trades.length === 0 ? (
-          <div className="rounded-lg bg-white p-12 text-center shadow">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-12 text-center shadow transition-colors">
             <Briefcase className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-4 text-lg font-medium text-gray-900">
+            <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">
               No Open Positions
             </h3>
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
               You don't have any open trades at the moment.
             </p>
           </div>
@@ -727,7 +727,7 @@ export default function PositionsPage() {
               category="stocks"
               longPositions={categorizedTrades.stocks.long}
               shortPositions={categorizedTrades.stocks.short}
-              color="bg-blue-50 border-b border-blue-100"
+              color="bg-blue-50 dark:bg-blue-900/30 border-b border-blue-100 dark:border-blue-800"
             />
 
             {/* Options Section */}
@@ -737,7 +737,7 @@ export default function PositionsPage() {
               category="options"
               longPositions={categorizedTrades.options.long}
               shortPositions={categorizedTrades.options.short}
-              color="bg-green-50 border-b border-green-100"
+              color="bg-green-50 dark:bg-green-900/30 border-b border-green-100 dark:border-green-800"
             />
 
             {/* Combos Section */}
@@ -747,7 +747,7 @@ export default function PositionsPage() {
               category="combos"
               longPositions={categorizedTrades.combos.long}
               shortPositions={categorizedTrades.combos.short}
-              color="bg-purple-50 border-b border-purple-100"
+              color="bg-purple-50 dark:bg-purple-900/30 border-b border-purple-100 dark:border-purple-800"
             />
           </div>
         )}

@@ -21,24 +21,24 @@ interface StatCardProps {
 
 function StatCard({ title, value, change, trend, icon }: StatCardProps) {
   const trendColors = {
-    up: 'text-green-600',
-    down: 'text-red-600',
-    neutral: 'text-gray-600',
+    up: 'text-green-600 dark:text-green-400',
+    down: 'text-red-600 dark:text-red-400',
+    neutral: 'text-gray-600 dark:text-gray-400',
   };
 
   return (
-    <div className="rounded-lg bg-white p-6 shadow">
+    <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
       <div className="flex items-center justify-between">
         <div className="flex-1">
-          <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="mt-2 text-3xl font-bold text-gray-900">{value}</p>
+          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{title}</p>
+          <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">{value}</p>
           {change && (
             <p className={`mt-2 text-sm ${trendColors[trend || 'neutral']}`}>
               {change}
             </p>
           )}
         </div>
-        <div className="rounded-full bg-blue-50 p-3">{icon}</div>
+        <div className="rounded-full bg-blue-50 dark:bg-blue-900/30 p-3">{icon}</div>
       </div>
     </div>
   );
@@ -71,13 +71,13 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div>
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
         <Header title="Dashboard" subtitle="Overview of your trading performance" />
         <div className="p-6">
           <div className="animate-pulse">
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-32 rounded-lg bg-gray-200" />
+                <div key={i} className="h-32 rounded-lg bg-gray-200 dark:bg-gray-700" />
               ))}
             </div>
           </div>
@@ -87,7 +87,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div>
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
       <Header
         title="Dashboard"
         subtitle="Overview of your trading performance"
@@ -140,11 +140,11 @@ export default function Dashboard() {
         </div>
 
         {/* Welcome Message */}
-        <div className="mt-8 rounded-lg bg-blue-50 p-6">
-          <h2 className="text-lg font-semibold text-gray-900">
+        <div className="mt-8 rounded-lg bg-blue-50 dark:bg-blue-900/30 p-6 transition-colors">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
             Welcome to Trading Journal
           </h2>
-          <p className="mt-2 text-sm text-gray-600">
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
             Your trading analytics dashboard is ready. Explore the different
             sections using the sidebar to view detailed analytics, positions,
             trades, and performance metrics.
@@ -153,70 +153,70 @@ export default function Dashboard() {
 
         {/* Quick Stats */}
         <div className="mt-8 grid gap-6 md:grid-cols-2">
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-lg font-semibold text-gray-900">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               Trade Statistics
             </h3>
             <div className="mt-4 space-y-3">
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Total Trades</span>
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Total Trades</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {winRate?.total_trades || 0}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Average Win</span>
-                <span className="text-sm font-medium text-green-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Average Win</span>
+                <span className="text-sm font-medium text-green-600 dark:text-green-400">
                   {formatCurrency(winRate?.avg_win || 0)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Average Loss</span>
-                <span className="text-sm font-medium text-red-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Average Loss</span>
+                <span className="text-sm font-medium text-red-600 dark:text-red-400">
                   {formatCurrency(winRate?.avg_loss || 0)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Largest Win</span>
-                <span className="text-sm font-medium text-green-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Largest Win</span>
+                <span className="text-sm font-medium text-green-600 dark:text-green-400">
                   {formatCurrency(winRate?.largest_win || 0)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Largest Loss</span>
-                <span className="text-sm font-medium text-red-600">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Largest Loss</span>
+                <span className="text-sm font-medium text-red-600 dark:text-red-400">
                   {formatCurrency(winRate?.largest_loss || 0)}
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-lg font-semibold text-gray-900">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               Drawdown Analysis
             </h3>
             <div className="mt-4 space-y-3">
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Current Drawdown</span>
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Current Drawdown</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {formatPercent((drawdown?.current_drawdown_percent || 0) / 100)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Peak Value</span>
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Peak Value</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.peak_value || 0)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Current Value</span>
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Current Value</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.current_value || 0)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-gray-600">Days in Drawdown</span>
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Days in Drawdown</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {drawdown?.days_in_drawdown || 0}
                 </span>
               </div>

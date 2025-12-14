@@ -37,17 +37,17 @@ export default function PerformancePage() {
 
   if (loading) {
     return (
-      <div>
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
         <Header
           title="Performance"
           subtitle="Track your trading performance over time"
         />
         <div className="p-6">
           <div className="animate-pulse space-y-6">
-            <div className="h-96 rounded-lg bg-gray-200" />
+            <div className="h-96 rounded-lg bg-gray-200 dark:bg-gray-700" />
             <div className="grid gap-6 md:grid-cols-3">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="h-32 rounded-lg bg-gray-200" />
+                <div key={i} className="h-32 rounded-lg bg-gray-200 dark:bg-gray-700" />
               ))}
             </div>
           </div>
@@ -57,7 +57,7 @@ export default function PerformancePage() {
   }
 
   return (
-    <div>
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
       <Header
         title="Performance"
         subtitle="Track your trading performance over time"
@@ -65,14 +65,14 @@ export default function PerformancePage() {
 
       <div className="p-6 space-y-6">
         {/* Equity Curve */}
-        <div className="rounded-lg bg-white p-6 shadow">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Equity Curve
           </h2>
           {equityData.length > 0 ? (
             <EquityCurveChart data={equityData} />
           ) : (
-            <div className="flex h-96 items-center justify-center text-gray-500">
+            <div className="flex h-96 items-center justify-center text-gray-500 dark:text-gray-400">
               No performance data available
             </div>
           )}
@@ -81,27 +81,27 @@ export default function PerformancePage() {
         {/* Performance Metrics */}
         <div className="grid gap-6 md:grid-cols-3">
           {/* Sharpe Ratio */}
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Sharpe Ratio</h3>
-            <p className="mt-2 text-3xl font-bold text-gray-900">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Sharpe Ratio</h3>
+            <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">
               {sharpe?.sharpe_ratio.toFixed(2) || '0.00'}
             </p>
             <div className="mt-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Annual Return</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Annual Return</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatPercent((sharpe?.annual_return || 0) / 100)}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Annual Volatility</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Annual Volatility</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatPercent((sharpe?.annual_volatility || 0) / 100)}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Risk-Free Rate</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Risk-Free Rate</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatPercent((sharpe?.risk_free_rate || 0) / 100)}
                 </span>
               </div>
@@ -109,21 +109,21 @@ export default function PerformancePage() {
           </div>
 
           {/* Max Drawdown */}
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">Max Drawdown</h3>
-            <p className="mt-2 text-3xl font-bold text-red-600">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Max Drawdown</h3>
+            <p className="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
               {formatPercent((drawdown?.max_drawdown_percent || 0) / 100)}
             </p>
             <div className="mt-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Amount</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Amount</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.max_drawdown || 0)}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Peak Value</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Peak Value</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.peak_value || 0)}
                 </span>
               </div>
@@ -131,29 +131,29 @@ export default function PerformancePage() {
           </div>
 
           {/* Current Drawdown */}
-          <div className="rounded-lg bg-white p-6 shadow">
-            <h3 className="text-sm font-medium text-gray-600">
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">
               Current Drawdown
             </h3>
-            <p className="mt-2 text-3xl font-bold text-orange-600">
+            <p className="mt-2 text-3xl font-bold text-orange-600 dark:text-orange-400">
               {formatPercent((drawdown?.current_drawdown_percent || 0) / 100)}
             </p>
             <div className="mt-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Amount</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Amount</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.current_drawdown || 0)}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Days in Drawdown</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Days in Drawdown</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {drawdown?.days_in_drawdown || 0}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Current Value</span>
-                <span className="font-medium text-gray-900">
+                <span className="text-gray-600 dark:text-gray-400">Current Value</span>
+                <span className="font-medium text-gray-900 dark:text-white">
                   {formatCurrency(drawdown?.current_value || 0)}
                 </span>
               </div>
@@ -162,34 +162,34 @@ export default function PerformancePage() {
         </div>
 
         {/* Summary Statistics */}
-        <div className="rounded-lg bg-white p-6 shadow">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Performance Summary
           </h2>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div>
-              <p className="text-sm text-gray-600">Total Trading Days</p>
-              <p className="mt-1 text-xl font-semibold text-gray-900">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Trading Days</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
                 {sharpe?.total_days || 0}
               </p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total Trades</p>
-              <p className="mt-1 text-xl font-semibold text-gray-900">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Trades</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
                 {equityData[equityData.length - 1]?.trade_count || 0}
               </p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Final P&L</p>
-              <p className="mt-1 text-xl font-semibold text-gray-900">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Final P&L</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
                 {formatCurrency(
                   equityData[equityData.length - 1]?.cumulative_pnl || 0
                 )}
               </p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Starting P&L</p>
-              <p className="mt-1 text-xl font-semibold text-gray-900">
+              <p className="text-sm text-gray-600 dark:text-gray-400">Starting P&L</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
                 {formatCurrency(equityData[0]?.cumulative_pnl || 0)}
               </p>
             </div>

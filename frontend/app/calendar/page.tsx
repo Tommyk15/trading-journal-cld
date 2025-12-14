@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { api } from '@/lib/api/client';
 import { formatCurrency } from '@/lib/utils';
-import { ChevronLeft, ChevronRight, Settings, Camera, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Trade {
   id: number;
@@ -39,6 +39,17 @@ interface WeekData {
   weekNum: number;
   pnl: number;
   tradingDays: number;
+  winners: number;
+  losers: number;
+}
+
+interface MonthData {
+  month: number;
+  year: number;
+  pnl: number;
+  trades: number;
+  winners: number;
+  losers: number;
 }
 
 export default function CalendarPage() {
@@ -52,7 +63,6 @@ export default function CalendarPage() {
   async function fetchTrades() {
     try {
       setLoading(true);
-      // Fetch all trades with pagination (API has limit restrictions)
       let allTrades: Trade[] = [];
       let offset = 0;
       const batchSize = 100;
@@ -83,7 +93,6 @@ export default function CalendarPage() {
     fetchTrades();
   }, []);
 
-  // Fetch executions for trades when a day is selected
   async function fetchExecutionsForTrades(dayTrades: Trade[]) {
     setLoadingExecutions(true);
     const newExecutions: Record<number, Execution[]> = { ...tradeExecutions };
@@ -107,13 +116,11 @@ export default function CalendarPage() {
     setLoadingExecutions(false);
   }
 
-  // Handle day click
   function handleDayClick(dayData: DayData) {
     setSelectedDay(dayData);
     fetchExecutionsForTrades(dayData.trades);
   }
 
-  // Format date to YYYY-MM-DD in local timezone
   function formatDateLocal(date: Date): string {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -121,15 +128,13 @@ export default function CalendarPage() {
     return `${year}-${month}-${day}`;
   }
 
-  // Format currency in K format
   function formatK(amount: number): string {
     if (Math.abs(amount) >= 1000) {
-      return `${amount >= 0 ? '' : '-'}$${Math.abs(amount / 1000).toFixed(2)}K`;
+      return `${amount >= 0 ? '' : '-'}$${Math.abs(amount / 1000).toFixed(1)}K`;
     }
     return `${amount >= 0 ? '' : '-'}$${Math.abs(amount).toFixed(0)}`;
   }
 
-  // Get days in month with padding
   function getDaysInMonth(date: Date): Date[] {
     const year = date.getFullYear();
     const month = date.getMonth();
@@ -138,19 +143,16 @@ export default function CalendarPage() {
 
     const days: Date[] = [];
 
-    // Add padding days from previous month
     const startDayOfWeek = firstDay.getDay();
     for (let i = startDayOfWeek - 1; i >= 0; i--) {
       const d = new Date(year, month, -i);
       days.push(d);
     }
 
-    // Add days of current month
     for (let d = 1; d <= lastDay.getDate(); d++) {
       days.push(new Date(year, month, d));
     }
 
-    // Add padding days from next month to complete 6 rows (42 days)
     while (days.length < 42) {
       const nextDay = days.length - startDayOfWeek - lastDay.getDate() + 1;
       days.push(new Date(year, month + 1, nextDay));
@@ -159,7 +161,6 @@ export default function CalendarPage() {
     return days;
   }
 
-  // Calculate day data from trades
   function getDayData(date: Date): DayData {
     const dateStr = formatDateLocal(date);
 
@@ -196,7 +197,7 @@ export default function CalendarPage() {
     return {
       date,
       pnl,
-      totalTrades: closed, // Total trades closed (for P&L calculation)
+      totalTrades: closed,
       winningTrades,
       losingTrades,
       opened,
@@ -205,7 +206,37 @@ export default function CalendarPage() {
     };
   }
 
-  // Calculate weekly summaries
+  // Calculate yearly month data for bar chart
+  const yearlyMonthData = useMemo((): MonthData[] => {
+    const year = currentMonth.getFullYear();
+    const months: MonthData[] = [];
+
+    for (let m = 0; m < 12; m++) {
+      let pnl = 0;
+      let tradeCount = 0;
+      let winners = 0;
+      let losers = 0;
+
+      trades.forEach(trade => {
+        if (trade.closed_at) {
+          const closedDate = new Date(trade.closed_at);
+          if (closedDate.getFullYear() === year && closedDate.getMonth() === m) {
+            const tradePnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : 0;
+            pnl += tradePnl;
+            tradeCount++;
+            if (tradePnl > 0) winners++;
+            else if (tradePnl < 0) losers++;
+          }
+        }
+      });
+
+      months.push({ month: m, year, pnl, trades: tradeCount, winners, losers });
+    }
+
+    return months;
+  }, [trades, currentMonth]);
+
+  // Calculate weekly data aligned with calendar rows
   function getWeeklyData(days: Date[]): WeekData[] {
     const weeks: WeekData[] = [];
 
@@ -213,24 +244,71 @@ export default function CalendarPage() {
       const weekDays = days.slice(i * 7, (i + 1) * 7);
       let weekPnl = 0;
       let tradingDays = 0;
+      let winners = 0;
+      let losers = 0;
 
       weekDays.forEach(day => {
-        if (isCurrentMonth(day)) {
-          const dayData = getDayData(day);
-          if (dayData.totalTrades > 0) {
-            weekPnl += dayData.pnl;
-            tradingDays++;
-          }
+        const dayData = getDayData(day);
+        if (dayData.totalTrades > 0) {
+          weekPnl += dayData.pnl;
+          tradingDays++;
+          winners += dayData.winningTrades;
+          losers += dayData.losingTrades;
         }
       });
 
-      weeks.push({ weekNum: i + 1, pnl: weekPnl, tradingDays });
+      weeks.push({ weekNum: i + 1, pnl: weekPnl, tradingDays, winners, losers });
     }
 
     return weeks;
   }
 
-  // Navigate months
+  // Calculate monthly stats for the displayed month
+  const monthlyStats = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+
+    let totalWinners = 0;
+    let totalLosers = 0;
+    let totalWinAmount = 0;
+    let totalLossAmount = 0;
+    let netPnl = 0;
+    let totalTrades = 0;
+
+    trades.forEach(trade => {
+      if (trade.closed_at) {
+        const closedDate = new Date(trade.closed_at);
+        if (closedDate.getFullYear() === year && closedDate.getMonth() === month) {
+          const tradePnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : 0;
+          netPnl += tradePnl;
+          totalTrades++;
+
+          if (tradePnl > 0) {
+            totalWinners++;
+            totalWinAmount += tradePnl;
+          } else if (tradePnl < 0) {
+            totalLosers++;
+            totalLossAmount += Math.abs(tradePnl);
+          }
+        }
+      }
+    });
+
+    const winRatio = totalTrades > 0 ? (totalWinners / totalTrades) * 100 : 0;
+    const avgWinner = totalWinners > 0 ? totalWinAmount / totalWinners : 0;
+    const avgLoser = totalLosers > 0 ? totalLossAmount / totalLosers : 0;
+
+    return {
+      totalWinners,
+      totalLosers,
+      avgWinner,
+      avgLoser,
+      winRatio,
+      netPnl,
+      totalTrades
+    };
+  }, [trades, currentMonth]);
+
   function prevMonth() {
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
     setSelectedDay(null);
@@ -241,313 +319,390 @@ export default function CalendarPage() {
     setSelectedDay(null);
   }
 
+  function goToMonth(monthIndex: number) {
+    setCurrentMonth(new Date(currentMonth.getFullYear(), monthIndex, 1));
+    setSelectedDay(null);
+  }
+
   function goToThisMonth() {
     setCurrentMonth(new Date());
     setSelectedDay(null);
   }
 
-  // Check if date is in current month
   function isCurrentMonth(date: Date): boolean {
     return date.getMonth() === currentMonth.getMonth() && date.getFullYear() === currentMonth.getFullYear();
   }
 
-  // Check if date is today
   function isToday(date: Date): boolean {
     const today = new Date();
     return date.toDateString() === today.toDateString();
   }
 
-  // Get background color class based on P&L
   function getDayBgClass(dayData: DayData, isInMonth: boolean): string {
-    if (!isInMonth) return 'bg-gray-50';
-    if (dayData.opened === 0 && dayData.closed === 0) return 'bg-white';
-    // Color based on closed trade P&L
+    if (!isInMonth) return 'bg-gray-50 dark:bg-gray-800/50';
+    if (dayData.opened === 0 && dayData.closed === 0) return 'bg-white dark:bg-gray-800';
     if (dayData.closed > 0) {
-      if (dayData.pnl > 0) return 'bg-green-100';
-      if (dayData.pnl < 0) return 'bg-red-100';
-      return 'bg-gray-100'; // break even
+      if (dayData.pnl > 0) return 'bg-green-50 dark:bg-green-900/20';
+      if (dayData.pnl < 0) return 'bg-red-50 dark:bg-red-900/20';
+      return 'bg-gray-100 dark:bg-gray-700';
     }
-    // Only opened trades - light blue
-    return 'bg-blue-50';
+    return 'bg-blue-50 dark:bg-blue-900/20';
   }
 
   const days = getDaysInMonth(currentMonth);
   const weeklyData = getWeeklyData(days);
 
-  // Calculate monthly totals
-  const monthlyData = days.filter(d => isCurrentMonth(d)).map(d => getDayData(d));
-  const monthlyPnl = monthlyData.reduce((sum, d) => sum + d.pnl, 0);
-  const tradingDays = monthlyData.filter(d => d.totalTrades > 0).length;
-
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Calculate max P&L for bar chart scaling
+  const maxAbsPnl = Math.max(...yearlyMonthData.map(m => Math.abs(m.pnl)), 1);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-100 p-6">
+      <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-6 transition-colors">
         <div className="animate-pulse">
-          <div className="h-[600px] rounded-lg bg-gray-200" />
+          <div className="h-[800px] rounded-lg bg-gray-200 dark:bg-gray-700" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="p-6">
-        <div className="flex gap-6">
-          {/* Main Calendar */}
-          <div className="flex-1 bg-white rounded-xl shadow-sm overflow-hidden">
-            {/* Header */}
-            <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={prevMonth}
-                  className="p-1 hover:bg-gray-100 rounded transition-colors"
-                >
-                  <ChevronLeft className="h-5 w-5 text-gray-600" />
-                </button>
-                <h2 className="text-lg font-semibold text-gray-900 min-w-[180px] text-center">
-                  {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                </h2>
-                <button
-                  onClick={nextMonth}
-                  className="p-1 hover:bg-gray-100 rounded transition-colors"
-                >
-                  <ChevronRight className="h-5 w-5 text-gray-600" />
-                </button>
-                <button
-                  onClick={goToThisMonth}
-                  className="ml-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                >
-                  This month
-                </button>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-500">Monthly stats:</span>
-                  <span className={`font-semibold ${monthlyPnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {formatK(monthlyPnl)}
-                  </span>
-                  <span className="text-gray-400">|</span>
-                  <span className="text-gray-700">{tradingDays} days</span>
-                </div>
-                <div className="flex items-center gap-2 text-gray-400">
-                  <button className="p-1.5 hover:bg-gray-100 rounded"><Settings className="h-4 w-4" /></button>
-                  <button className="p-1.5 hover:bg-gray-100 rounded"><Camera className="h-4 w-4" /></button>
-                  <button className="p-1.5 hover:bg-gray-100 rounded"><Info className="h-4 w-4" /></button>
-                </div>
-              </div>
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
+      <div className="p-6 space-y-4">
+        {/* Yearly P&L Bar Chart */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-4 transition-colors">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{currentMonth.getFullYear()} Monthly P&L</h2>
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              YTD: <span className={`font-semibold ${yearlyMonthData.reduce((s, m) => s + m.pnl, 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {formatCurrency(yearlyMonthData.reduce((s, m) => s + m.pnl, 0))}
+              </span>
             </div>
+          </div>
+          <div className="flex items-end justify-between gap-1 h-24">
+            {yearlyMonthData.map((m, idx) => {
+              const barHeight = maxAbsPnl > 0 ? (Math.abs(m.pnl) / maxAbsPnl) * 100 : 0;
+              const isSelected = idx === currentMonth.getMonth();
 
-            {/* Week Day Headers */}
-            <div className="grid grid-cols-7 border-b border-gray-100">
-              {weekDays.map(day => (
+              return (
                 <div
-                  key={day}
-                  className="px-2 py-3 text-center text-sm font-medium text-gray-500"
+                  key={idx}
+                  className="flex-1 flex flex-col items-center cursor-pointer group"
+                  onClick={() => goToMonth(idx)}
                 >
-                  {day}
-                </div>
-              ))}
-            </div>
-
-            {/* Calendar Grid */}
-            <div className="grid grid-cols-7">
-              {days.map((date, idx) => {
-                const dayData = getDayData(date);
-                const inMonth = isCurrentMonth(date);
-                const today = isToday(date);
-                const hasActivity = dayData.opened > 0 || dayData.closed > 0;
-                const winRate = dayData.closed > 0
-                  ? ((dayData.winningTrades / dayData.closed) * 100).toFixed(dayData.closed > 2 ? 2 : 1)
-                  : 0;
-
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => hasActivity && inMonth ? handleDayClick(dayData) : null}
-                    className={`
-                      min-h-[110px] p-2 border-b border-r border-gray-100 relative
-                      ${getDayBgClass(dayData, inMonth)}
-                      ${hasActivity && inMonth ? 'cursor-pointer hover:opacity-80' : ''}
-                      ${!inMonth ? 'opacity-40' : ''}
-                    `}
-                  >
-                    {/* Day Number */}
-                    <div className="flex justify-end">
-                      <span className={`
-                        text-sm font-medium
-                        ${today ? 'bg-blue-500 text-white w-7 h-7 rounded-full flex items-center justify-center' : ''}
-                        ${!today && inMonth ? 'text-gray-700' : ''}
-                        ${!inMonth ? 'text-gray-400' : ''}
-                      `}>
-                        {date.getDate()}
-                      </span>
-                    </div>
-
-                    {/* Day Stats */}
-                    {inMonth && hasActivity && (
-                      <div className="mt-1 text-center">
-                        {/* P&L - only show if closed trades */}
-                        {dayData.closed > 0 && (
-                          <div className={`text-lg font-bold ${dayData.pnl >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
-                            {formatK(dayData.pnl)}
-                          </div>
-                        )}
-                        {/* Opened/Closed counts */}
-                        <div className="flex justify-center gap-1 mt-0.5">
-                          {dayData.opened > 0 && (
-                            <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
-                              +{dayData.opened}
-                            </span>
-                          )}
-                          {dayData.closed > 0 && (
-                            <span className="text-xs px-1.5 py-0.5 bg-gray-200 text-gray-700 rounded">
-                              -{dayData.closed}
-                            </span>
-                          )}
-                        </div>
-                        {/* Win rate - only show if closed trades */}
-                        {dayData.closed > 0 && (
-                          <div className="text-xs text-gray-400 mt-0.5">
-                            {winRate}%
-                          </div>
-                        )}
-                      </div>
+                  <div className="relative w-full h-20 flex items-end justify-center">
+                    {m.pnl !== 0 && (
+                      <div
+                        className={`
+                          w-full max-w-[40px] rounded-t transition-all
+                          ${m.pnl >= 0 ? 'bg-green-500' : 'bg-red-500'}
+                          ${isSelected ? 'opacity-100' : 'opacity-60 group-hover:opacity-80'}
+                        `}
+                        style={{ height: `${Math.max(barHeight, 4)}%` }}
+                      />
+                    )}
+                    {m.pnl === 0 && (
+                      <div className="w-full max-w-[40px] h-1 bg-gray-200 dark:bg-gray-600 rounded" />
                     )}
                   </div>
-                );
-              })}
+                  <div className={`
+                    text-xs mt-1 font-medium
+                    ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}
+                  `}>
+                    {monthNames[idx]}
+                  </div>
+                  <div className={`
+                    text-xs
+                    ${m.pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}
+                    ${m.pnl === 0 ? 'text-gray-400 dark:text-gray-500' : ''}
+                  `}>
+                    {m.pnl === 0 ? '-' : formatK(m.pnl)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Monthly Stats Bar */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm px-6 py-4 transition-colors">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-8">
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Net P&L</p>
+                <p className={`text-2xl font-bold ${monthlyStats.netPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {formatCurrency(monthlyStats.netPnl)}
+                </p>
+              </div>
+              <div className="h-12 w-px bg-gray-200 dark:bg-gray-700" />
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Total Trades</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{monthlyStats.totalTrades}</p>
+              </div>
+              <div className="h-12 w-px bg-gray-200 dark:bg-gray-700" />
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Win Ratio</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{monthlyStats.winRatio.toFixed(1)}%</p>
+              </div>
+              <div className="h-12 w-px bg-gray-200 dark:bg-gray-700" />
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Winners</p>
+                <p className="text-xl font-semibold text-green-600 dark:text-green-400">{monthlyStats.totalWinners}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">avg {formatCurrency(monthlyStats.avgWinner)}</p>
+              </div>
+              <div className="h-12 w-px bg-gray-200 dark:bg-gray-700" />
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Losers</p>
+                <p className="text-xl font-semibold text-red-600 dark:text-red-400">{monthlyStats.totalLosers}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">avg {formatCurrency(monthlyStats.avgLoser)}</p>
+              </div>
+            </div>
+            <button
+              onClick={goToThisMonth}
+              className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+            >
+              Today
+            </button>
+          </div>
+        </div>
+
+        {/* Calendar with Inline Weekly Summaries */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden transition-colors">
+          {/* Header */}
+          <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100 dark:border-gray-700">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={prevMonth}
+                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+              >
+                <ChevronLeft className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+              </button>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white min-w-[180px] text-center">
+                {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </h2>
+              <button
+                onClick={nextMonth}
+                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+              >
+                <ChevronRight className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+              </button>
             </div>
           </div>
 
-          {/* Weekly Summary Sidebar */}
-          <div className="w-48 space-y-3">
-            {weeklyData.map((week) => (
+          {/* Week Day Headers + Weekly Summary Header */}
+          <div className="grid grid-cols-8 border-b border-gray-100 dark:border-gray-700">
+            {weekDays.map(day => (
               <div
-                key={week.weekNum}
-                className="bg-white rounded-xl p-4 shadow-sm"
+                key={day}
+                className="px-2 py-3 text-center text-sm font-medium text-gray-500 dark:text-gray-400"
               >
-                <div className="text-sm text-gray-500 mb-1">Week {week.weekNum}</div>
-                <div className={`text-xl font-bold ${week.pnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                  {week.pnl === 0 ? '$0' : formatK(week.pnl)}
-                </div>
-                <div className="mt-1">
-                  <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
-                    {week.tradingDays} day{week.tradingDays !== 1 ? 's' : ''}
-                  </span>
-                </div>
+                {day}
               </div>
             ))}
+            <div className="px-2 py-3 text-center text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50">
+              Week
+            </div>
           </div>
+
+          {/* Calendar Grid with Weekly Summaries */}
+          {[0, 1, 2, 3, 4, 5].map(weekIndex => {
+            const weekDaysSlice = days.slice(weekIndex * 7, (weekIndex + 1) * 7);
+            const week = weeklyData[weekIndex];
+            const hasWeekActivity = week.tradingDays > 0;
+
+            return (
+              <div key={weekIndex} className="grid grid-cols-8">
+                {/* Day Cells */}
+                {weekDaysSlice.map((date, dayIdx) => {
+                  const dayData = getDayData(date);
+                  const inMonth = isCurrentMonth(date);
+                  const today = isToday(date);
+                  const hasActivity = dayData.opened > 0 || dayData.closed > 0;
+                  const winRate = dayData.closed > 0
+                    ? ((dayData.winningTrades / dayData.closed) * 100).toFixed(0)
+                    : 0;
+
+                  return (
+                    <div
+                      key={dayIdx}
+                      onClick={() => hasActivity && inMonth ? handleDayClick(dayData) : null}
+                      className={`
+                        min-h-[100px] p-2 border-b border-r border-gray-100 dark:border-gray-700 relative
+                        ${getDayBgClass(dayData, inMonth)}
+                        ${hasActivity && inMonth ? 'cursor-pointer hover:opacity-80' : ''}
+                        ${!inMonth ? 'opacity-40' : ''}
+                      `}
+                    >
+                      <div className="flex justify-end">
+                        <span className={`
+                          text-sm font-medium
+                          ${today ? 'bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs' : ''}
+                          ${!today && inMonth ? 'text-gray-700 dark:text-gray-200' : ''}
+                          ${!inMonth ? 'text-gray-400 dark:text-gray-500' : ''}
+                        `}>
+                          {date.getDate()}
+                        </span>
+                      </div>
+
+                      {inMonth && hasActivity && (
+                        <div className="mt-1 text-center">
+                          {dayData.closed > 0 && (
+                            <div className={`text-base font-bold ${dayData.pnl >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                              {formatK(dayData.pnl)}
+                            </div>
+                          )}
+                          <div className="flex justify-center gap-1 mt-0.5">
+                            {dayData.opened > 0 && (
+                              <span className="text-xs px-1 py-0.5 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
+                                +{dayData.opened}
+                              </span>
+                            )}
+                            {dayData.closed > 0 && (
+                              <span className="text-xs px-1 py-0.5 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded">
+                                -{dayData.closed}
+                              </span>
+                            )}
+                          </div>
+                          {dayData.closed > 0 && (
+                            <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                              {winRate}%
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Weekly Summary Cell */}
+                <div className={`
+                  min-h-[100px] p-2 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50
+                  flex flex-col justify-center items-center
+                `}>
+                  {hasWeekActivity ? (
+                    <>
+                      <div className={`text-lg font-bold ${week.pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                        {formatK(week.pnl)}
+                      </div>
+                      <div className="flex gap-1 mt-1">
+                        <span className="text-xs text-green-600 dark:text-green-400">{week.winners}W</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500">/</span>
+                        <span className="text-xs text-red-500 dark:text-red-400">{week.losers}L</span>
+                      </div>
+                      <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                        {week.tradingDays} day{week.tradingDays !== 1 ? 's' : ''}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">-</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* Selected Day Details Modal */}
         {selectedDay && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedDay(null)}>
-            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-              <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   {selectedDay.date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
                 </h3>
                 <button
                   onClick={() => setSelectedDay(null)}
-                  className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-2xl leading-none"
                 >
                   &times;
                 </button>
               </div>
 
-              {/* Day Summary */}
-              <div className="px-6 py-4 grid grid-cols-5 gap-4 border-b border-gray-200">
+              <div className="px-6 py-4 grid grid-cols-5 gap-4 border-b border-gray-200 dark:border-gray-700">
                 <div>
-                  <p className="text-sm text-gray-500">P&L</p>
-                  <p className={`text-xl font-bold ${selectedDay.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">P&L</p>
+                  <p className={`text-xl font-bold ${selectedDay.pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     {formatCurrency(selectedDay.pnl)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Opened</p>
-                  <p className="text-xl font-bold text-blue-600">{selectedDay.opened}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Opened</p>
+                  <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{selectedDay.opened}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Closed</p>
-                  <p className="text-xl font-bold text-gray-900">{selectedDay.closed}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Closed</p>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">{selectedDay.closed}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Winners</p>
-                  <p className="text-xl font-bold text-green-600">{selectedDay.winningTrades}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Winners</p>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{selectedDay.winningTrades}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Losers</p>
-                  <p className="text-xl font-bold text-red-600">{selectedDay.losingTrades}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Losers</p>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{selectedDay.losingTrades}</p>
                 </div>
               </div>
 
-              {/* Trades List */}
               {selectedDay.trades.length > 0 && (
                 <div className="overflow-auto max-h-[400px]">
                   {loadingExecutions ? (
-                    <div className="p-6 text-center text-gray-500">Loading trade details...</div>
+                    <div className="p-6 text-center text-gray-500 dark:text-gray-400">Loading trade details...</div>
                   ) : (
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50 sticky top-0">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                      <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0">
                         <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strategy</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strike</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Exp</th>
-                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
-                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">P&L</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Ticker</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Strategy</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Qty</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Strike</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Exp</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Action</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">P&L</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200">
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                         {selectedDay.trades.map(trade => {
                           const dateStr = formatDateLocal(selectedDay.date);
                           const wasOpened = trade.opened_at?.split('T')[0] === dateStr;
                           const wasClosed = trade.closed_at?.split('T')[0] === dateStr;
                           const executions = tradeExecutions[trade.id] || [];
 
-                          // Get unique strikes and expirations
                           const strikes = [...new Set(executions.map(e => e.strike).filter(s => s))].sort((a, b) => (a || 0) - (b || 0));
                           const expirations = [...new Set(executions.map(e => e.expiration).filter(e => e))];
-                          const totalQty = executions.reduce((sum, e) => {
-                            // Only count opening transactions
-                            return sum + e.quantity;
-                          }, 0) / 2 || trade.num_legs; // Divide by 2 to account for open+close, fallback to num_legs
+                          const totalQty = executions.reduce((sum, e) => sum + e.quantity, 0) / 2 || trade.num_legs;
 
-                          // Format expiration date
                           const expDisplay = expirations.length > 0
                             ? new Date(expirations[0]!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                             : '-';
 
                           return (
-                            <tr key={trade.id} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                            <tr key={trade.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                                 {trade.underlying}
                               </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
                                 {trade.strategy_type}
                               </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 text-right">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
                                 {Math.round(totalQty) || '-'}
                               </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                                 {strikes.length > 0 ? strikes.join('/') : '-'}
                               </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                                 {expDisplay}
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
                                 <div className="flex justify-center gap-1">
                                   {wasOpened && (
-                                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                                    <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded text-xs">
                                       Opened
                                     </span>
                                   )}
                                   {wasClosed && (
-                                    <span className="px-2 py-0.5 bg-gray-200 text-gray-700 rounded text-xs">
+                                    <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded text-xs">
                                       Closed
                                     </span>
                                   )}
@@ -555,11 +710,11 @@ export default function CalendarPage() {
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap text-sm text-right">
                                 {wasClosed ? (
-                                  <span className={`font-semibold ${parseFloat(trade.realized_pnl || '0') >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <span className={`font-semibold ${parseFloat(trade.realized_pnl || '0') >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                                     {formatCurrency(parseFloat(trade.realized_pnl || '0'))}
                                   </span>
                                 ) : (
-                                  <span className="text-gray-400">-</span>
+                                  <span className="text-gray-400 dark:text-gray-500">-</span>
                                 )}
                               </td>
                             </tr>
