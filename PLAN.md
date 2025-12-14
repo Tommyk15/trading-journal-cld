@@ -172,7 +172,154 @@ This document tracks the development phases for the Trading Journal application,
 
 ---
 
-## Phase 4: Advanced Features (PLANNED)
+## Phase 4: Greeks & Trade Analytics (PLANNED)
+
+**Target:** Add comprehensive Greeks, IV metrics, and risk analytics to trades, captured at both open and close.
+
+### Overview
+Enhance trades with real-time Greeks, IV metrics, probability of profit, and risk analytics. Data sourced from IBKR (primary) and Polygon.io Options Starter tier (fallback).
+
+### 4.1 Database Schema Changes
+
+**Modify `trades` Table (30 new columns):**
+- Trade Open Snapshot: `underlying_price_open`, `iv_open`, `iv_percentile_52w_open`, `iv_rank_52w_open`, `iv_percentile_custom_open`, `iv_rank_custom_open`, `iv_custom_period_days`, `delta_open`, `gamma_open`, `theta_open`, `vega_open`, `rho_open`, `pop_open`, `max_profit`, `max_risk`, `collateral_calculated`, `collateral_ibkr`
+- Trade Close Snapshot: `underlying_price_close`, `iv_close`, `delta_close`, `gamma_close`, `theta_close`, `vega_close`, `rho_close`, `pnl_percent`
+- Flags: `greeks_source`, `greeks_pending`
+
+**New Tables:**
+- [ ] `trade_leg_greeks` - Per-leg Greeks with bid/ask/spread, OI, volume
+- [ ] `underlying_iv_history` - Forward-only IV storage for rank/percentile
+- [ ] `margin_settings` - Per-underlying margin % configuration
+
+### 4.2 Calculation Algorithms
+
+**Greeks:**
+- [ ] Net Greeks calculation (sum across legs weighted by signed quantity)
+- [ ] Trade-level IV selection (short strike IV for credit strategies)
+- [ ] `days_held` as computed property (not stored)
+
+**IV Metrics:**
+- [ ] IV Percentile (52-week + customizable period, calendar days)
+- [ ] IV Rank (52-week + customizable period)
+- [ ] Forward-only IV history storage
+
+**Risk Analytics:**
+- [ ] Black-Scholes PoP calculation (using scipy.stats.norm)
+- [ ] Breakeven calculation per strategy type
+- [ ] Max Profit/Risk per strategy (spreads, iron condors, butterflies, custom)
+- [ ] Collateral calculation (configurable margin % per underlying)
+- [ ] P&L percentage (% of max profit achieved)
+
+**Multi-Expiry Handling:**
+- [ ] Front month expiration for PoP/DTE on calendar spreads
+
+### 4.3 Data Sources
+
+**Primary: IBKR (ib_insync)**
+- Real-time Greeks via `reqMktData` with `genericTickList="106"`
+- IV from `ticker.modelGreeks.impliedVol`
+- Margin via `whatIfOrderAsync()`
+
+**Fallback: Polygon.io Options Starter ($29/mo)**
+- Greeks via `/v3/snapshot/options/{ticker}`
+- Underlying price via `/v2/aggs/ticker/{ticker}/prev`
+- Try Polygon first when IBKR not connected
+
+**Risk-Free Rate: FRED API**
+- 3-month T-bill rate (DTB3)
+- Cached 24 hours, fallback to 5%
+
+### 4.4 New Services
+
+- [ ] `TradeAnalyticsService` - Main orchestrator for snapshot capture
+- [ ] `PolygonService` - Polygon.io API client
+- [ ] `FredService` - FRED API for risk-free rate
+- [ ] `IVHistoryService` - IV rank/percentile calculations
+- [ ] `CollateralService` - Margin calculations
+
+### 4.5 API Endpoints
+
+**New Routes: `/api/v1/trade-analytics`**
+- [ ] `GET /api/v1/trade-analytics/{trade_id}` - Analytics summary
+- [ ] `GET /api/v1/trade-analytics/{trade_id}/legs` - Leg-level Greeks
+- [ ] `POST /api/v1/trade-analytics/{trade_id}/fetch-greeks` - Manual refresh
+- [ ] `POST /api/v1/trade-analytics/fetch-pending` - Batch fetch pending
+- [ ] `GET/PUT/DELETE /api/v1/trade-analytics/margin/{underlying}` - Margin settings
+
+### 4.6 Frontend Components
+
+- [ ] `TradeAnalytics.tsx` - Full trade analytics display
+- [ ] `LegGreeksTable.tsx` - Per-leg Greeks table
+- [ ] `TableColumnConfig.tsx` - Drag-and-drop column config (@dnd-kit)
+- [ ] `LightweightChartWidget.tsx` - TradingView Lightweight Charts with entry/exit markers
+
+**Trade List Enhancements:**
+- [ ] Customizable columns (drag-and-drop reorder, show/hide)
+- [ ] New columns: Days Held, PoP, Max Profit, Max Risk, IV Rank, Greeks
+
+### 4.7 Edge Cases
+
+- [ ] Expired options: Skip Greeks capture, mark as "EXPIRED"
+- [ ] Offline trades: Polygon first, queue if both fail
+- [ ] Premium calculation from `net_amount` (includes commissions)
+- [ ] Leg separation by `option_type` field for Iron Condors
+
+### 4.8 Dependencies
+
+- [ ] Add `scipy` to requirements.txt (for norm.cdf)
+- [ ] Add `lightweight-charts` to frontend
+- [ ] Add `@dnd-kit/core`, `@dnd-kit/sortable` to frontend
+- [ ] Add `POLYGON_API_KEY` and `FRED_API_KEY` to config
+
+### 4.9 Implementation Phases
+
+**Phase 4.1: Database & Models**
+1. Alembic migration for Trade model changes
+2. Create `TradeLegGreeks`, `UnderlyingIVHistory`, `MarginSettings` models
+3. Add `days_held` property to Trade model
+4. Add scipy to requirements.txt
+
+**Phase 4.2: External Integrations**
+1. Create `PolygonService` with Greeks/IV fetching
+2. Create `FredService` for risk-free rate
+3. Implement rate limiting and error handling
+
+**Phase 4.3: Calculation Services**
+1. Create `TradeAnalyticsService`
+2. Implement all calculation algorithms
+3. Create `CollateralService` and `IVHistoryService`
+
+**Phase 4.4: Integration**
+1. Modify `TradeGroupingService` to call snapshot capture
+2. Add expired option handling
+3. Create API routes and Pydantic schemas
+
+**Phase 4.5: Frontend**
+1. Create analytics components
+2. Add Lightweight Charts with markers
+3. Implement customizable table columns
+
+**Phase 4.6: Testing**
+1. Unit tests for all calculations
+2. Integration tests for data flow
+3. Edge case handling tests
+
+### Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Chart widget | Lightweight Charts | Supports custom markers |
+| IV history | Forward-only | Polygon lacks historical IV |
+| Trade-level IV | Short strike IV | Standard for options |
+| Days held | Calculated dynamically | Avoids duplication |
+| IV periods | Calendar days | Simpler, intuitive |
+| Expired options | Skip Greeks | Meaningless after expiry |
+| Risk-free rate | FRED API | Accurate, free |
+| Premium calc | From net_amount | Includes commissions |
+
+---
+
+## Phase 5: Advanced Features (PLANNED)
 
 ### Automated Trading Integration
 - [ ] Paper trading support
