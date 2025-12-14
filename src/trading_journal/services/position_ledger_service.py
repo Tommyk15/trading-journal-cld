@@ -1,6 +1,6 @@
 """Position Ledger Service - Manages persistent position tracking."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -114,7 +114,7 @@ class PositionLedgerService:
         if exec.side == "SLD":
             cost = -cost
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         if position is None:
             # Create new position

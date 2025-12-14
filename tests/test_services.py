@@ -1,6 +1,6 @@
 """Tests for service layer."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -19,7 +19,7 @@ async def test_create_execution(db_session):
         "exec_id": "TEST123",
         "order_id": 1,
         "perm_id": 1,
-        "execution_time": datetime.utcnow(),
+        "execution_time": datetime.now(timezone.utc),
         "underlying": "SPY",
         "security_type": "STK",
         "exchange": "SMART",
@@ -50,7 +50,7 @@ async def test_get_by_exec_id(db_session):
         "exec_id": "TEST456",
         "order_id": 2,
         "perm_id": 2,
-        "execution_time": datetime.utcnow(),
+        "execution_time": datetime.now(timezone.utc),
         "underlying": "AAPL",
         "security_type": "STK",
         "exchange": "SMART",
@@ -84,7 +84,7 @@ async def test_list_executions(db_session):
             "exec_id": f"TEST{i}",
             "order_id": i,
             "perm_id": i,
-            "execution_time": datetime.utcnow() - timedelta(days=i),
+            "execution_time": datetime.now(timezone.utc) - timedelta(days=i),
             "underlying": "SPY" if i % 2 == 0 else "AAPL",
             "security_type": "STK",
             "exchange": "SMART",
@@ -118,7 +118,7 @@ async def test_trade_grouping_simple(db_session):
         "exec_id": "BUY1",
         "order_id": 1,
         "perm_id": 1,
-        "execution_time": datetime.utcnow(),
+        "execution_time": datetime.now(timezone.utc),
         "underlying": "TSLA",
         "security_type": "STK",
         "exchange": "SMART",
@@ -135,7 +135,7 @@ async def test_trade_grouping_simple(db_session):
         "exec_id": "SELL1",
         "order_id": 2,
         "perm_id": 2,
-        "execution_time": datetime.utcnow() + timedelta(hours=1),
+        "execution_time": datetime.now(timezone.utc) + timedelta(hours=1),
         "underlying": "TSLA",
         "security_type": "STK",
         "exchange": "SMART",

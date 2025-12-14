@@ -1,6 +1,6 @@
 """Calendar service - aggregates trades and positions by time periods."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -36,14 +36,14 @@ class CalendarService:
         Returns:
             List of expiration dates with position details
         """
-        end_date = datetime.utcnow() + timedelta(days=days_ahead)
+        end_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
 
         stmt = (
             select(Position)
             .where(
                 Position.expiration.isnot(None),
                 Position.expiration <= end_date,
-                Position.expiration >= datetime.utcnow(),
+                Position.expiration >= datetime.now(timezone.utc),
             )
             .order_by(Position.expiration)
         )
@@ -66,7 +66,7 @@ class CalendarService:
         # Format response
         expirations = []
         for exp_date, exp_positions in sorted(by_expiration.items()):
-            days_until = (exp_date - datetime.utcnow().date()).days
+            days_until = (exp_date - datetime.now(timezone.utc).date()).days
 
             expirations.append({
                 "expiration_date": exp_date,

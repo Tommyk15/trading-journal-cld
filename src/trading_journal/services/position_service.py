@@ -1,7 +1,7 @@
 """Service for managing positions - syncing from IBKR and tracking open positions."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -100,7 +100,7 @@ class PositionService:
                     # Update existing position
                     existing.quantity = position_data["quantity"]
                     existing.avg_cost = position_data["avg_cost"]
-                    existing.updated_at = datetime.utcnow()
+                    existing.updated_at = datetime.now(timezone.utc)
                     stats["updated"] += 1
                 else:
                     # Create new position (needs to be linked to a trade)
@@ -152,7 +152,7 @@ class PositionService:
             underlying=position_data["underlying"],
             strategy_type="Single",  # Placeholder
             status="OPEN",
-            opened_at=datetime.utcnow(),
+            opened_at=datetime.now(timezone.utc),
             closed_at=None,
             realized_pnl=Decimal("0.00"),
             unrealized_pnl=Decimal("0.00"),
@@ -226,7 +226,7 @@ class PositionService:
             pnl_per_share = position.avg_cost - current_price
 
         position.unrealized_pnl = pnl_per_share * abs(position.quantity)
-        position.updated_at = datetime.utcnow()
+        position.updated_at = datetime.now(timezone.utc)
 
         await self.session.flush()
         return position

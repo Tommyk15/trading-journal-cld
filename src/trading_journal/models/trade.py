@@ -1,6 +1,6 @@
 """Trade model - Grouped trades from executions."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import DateTime, Integer, Numeric, String, Text
@@ -31,9 +31,9 @@ class Trade(Base):
     # Timestamps
     opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     # P&L tracking

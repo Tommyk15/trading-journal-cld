@@ -1,6 +1,6 @@
 """Position Ledger model - Persistent position tracking."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 
@@ -50,14 +50,14 @@ class PositionLedger(Base):
     opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_updated: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     # Link to current trade (if grouped)
     trade_id: Mapped[int | None] = mapped_column(ForeignKey("trades.id", ondelete="SET NULL"), index=True)
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     def __repr__(self) -> str:
         """String representation."""

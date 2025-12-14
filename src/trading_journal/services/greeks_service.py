@@ -1,6 +1,6 @@
 """Service for managing Greeks data - fetching, storing, and retrieving."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -141,7 +141,7 @@ class GreeksService:
         """
         greeks = Greeks(
             position_id=position_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             delta=greeks_data.get("delta"),
             gamma=greeks_data.get("gamma"),
             theta=greeks_data.get("theta"),
