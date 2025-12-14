@@ -65,6 +65,12 @@ class Settings(BaseSettings):
         default=["http://localhost:3000", "http://localhost:8000"]
     )
 
+    # Polygon.io Configuration
+    polygon_api_key: str | None = Field(default=None)
+
+    # FRED API Configuration
+    fred_api_key: str | None = Field(default=None)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading_journal.core.database import Base
@@ -65,6 +65,58 @@ class Trade(Base):
     is_assignment: Mapped[bool] = mapped_column(default=False, nullable=False)
     assigned_from_trade_id: Mapped[int | None] = mapped_column(Integer)
     # assigned_from_trade_id links to the option trade that was assigned
+
+    # ===========================================
+    # Trade Open Snapshot (Greeks & IV at entry)
+    # ===========================================
+    underlying_price_open: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    iv_open: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))  # e.g., 0.35 for 35%
+    iv_percentile_52w_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # 0-100
+    iv_rank_52w_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # 0-100
+    iv_percentile_custom_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    iv_rank_custom_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    iv_custom_period_days: Mapped[int | None] = mapped_column(Integer)  # Custom lookback period
+    delta_open: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    gamma_open: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    theta_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    vega_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    rho_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    pop_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # Probability of Profit 0-100
+
+    # Risk analytics at open
+    max_profit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    max_risk: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    collateral_calculated: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    collateral_ibkr: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+
+    # ===========================================
+    # Trade Close Snapshot (Greeks & IV at exit)
+    # ===========================================
+    underlying_price_close: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    iv_close: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    delta_close: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    gamma_close: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    theta_close: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    vega_close: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    rho_close: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    pnl_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))  # % of max profit achieved
+
+    # ===========================================
+    # Greeks metadata
+    # ===========================================
+    greeks_source: Mapped[str | None] = mapped_column(String(20))  # IBKR, POLYGON, CALCULATED
+    greeks_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    @property
+    def days_held(self) -> int | None:
+        """Calculate days held from open to close (or current date if still open)."""
+        if self.opened_at is None:
+            return None
+        end_date = self.closed_at if self.closed_at else datetime.now(UTC)
+        # Convert to date for calendar day calculation
+        open_date = self.opened_at.date() if isinstance(self.opened_at, datetime) else self.opened_at
+        close_date = end_date.date() if isinstance(end_date, datetime) else end_date
+        return (close_date - open_date).days
 
     def __repr__(self) -> str:
         """String representation."""
