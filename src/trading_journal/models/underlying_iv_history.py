@@ -1,6 +1,6 @@
 """UnderlyingIVHistory model - Historical IV data for IV rank/percentile calculations."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import Date, DateTime, Integer, Numeric, String, UniqueConstraint
@@ -46,7 +46,7 @@ class UnderlyingIVHistory(Base):
     data_source: Mapped[str] = mapped_column(String(20), nullable=False)  # IBKR, POLYGON
 
     # Metadata
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     def __repr__(self) -> str:
         """String representation."""
