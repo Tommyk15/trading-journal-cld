@@ -336,6 +336,10 @@ class TradeGroupingService:
         - Multi-leg strategies placed as separate orders
         - Spreads executed simultaneously but with different order IDs
 
+        IMPORTANT: Executions with different expirations are NEVER grouped together,
+        even if they occur within the time window. Different expirations indicate
+        different strategies (e.g., a Long Call LEAP vs a short-term put spread).
+
         Args:
             executions: Sorted list of executions
 
@@ -345,7 +349,7 @@ class TradeGroupingService:
         if not executions:
             return []
 
-        groups = []
+        time_groups = []
         current_group = []
         group_start_time = None
 
@@ -366,15 +370,62 @@ class TradeGroupingService:
                     current_group.append(exec)
                 else:
                     # Too far apart - finalize current group and start new one
-                    groups.append(current_group)
+                    time_groups.append(current_group)
                     current_group = [exec]
                     group_start_time = exec.execution_time
 
         # Add final group
         if current_group:
-            groups.append(current_group)
+            time_groups.append(current_group)
 
-        return groups
+        # Now split each time group by expiration to separate different strategies
+        # Executions with different expirations should NOT be grouped together
+        final_groups = []
+        for time_group in time_groups:
+            expiry_subgroups = self._split_group_by_expiration(time_group)
+            final_groups.extend(expiry_subgroups)
+
+        return final_groups
+
+    def _split_group_by_expiration(self, executions: list[Execution]) -> list[list[Execution]]:
+        """Split a group of executions by expiration date.
+
+        Executions with different expirations are clearly different strategies
+        and should not be grouped together. For example:
+        - A Jan 2027 LEAP and a Jan 2026 put spread executed at the same time
+          should be treated as separate trades.
+
+        Stock executions (no expiration) are kept separate from options.
+
+        Args:
+            executions: List of executions to split
+
+        Returns:
+            List of execution groups, one per expiration
+        """
+        if len(executions) <= 1:
+            return [executions] if executions else []
+
+        # Group by normalized expiration
+        by_expiry: dict[str, list[Execution]] = {}
+
+        for exec in executions:
+            if exec.security_type == "OPT" and exec.expiration:
+                # Normalize expiration to date string
+                expiry_key = self._normalize_expiration_date(exec.expiration)
+            elif exec.security_type == "STK":
+                # Stock executions get their own key
+                expiry_key = "STK"
+            else:
+                # Other types (shouldn't happen often)
+                expiry_key = "OTHER"
+
+            if expiry_key not in by_expiry:
+                by_expiry[expiry_key] = []
+            by_expiry[expiry_key].append(exec)
+
+        # Return as list of groups, sorted by expiry for consistency
+        return [by_expiry[key] for key in sorted(by_expiry.keys())]
 
     def _get_leg_key_from_exec(self, execution: Execution) -> str:
         """Get leg key from execution (same as TradeLedger.get_leg_key)."""
