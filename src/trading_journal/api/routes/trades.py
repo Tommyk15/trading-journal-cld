@@ -135,6 +135,67 @@ async def list_trades(
     )
 
 
+@router.get("/expired/candidates")
+async def get_expired_candidates(
+    session: AsyncSession = Depends(get_db),
+):
+    """Get list of OPEN trades that have expired options (preview).
+
+    This endpoint shows trades that would be marked as EXPIRED if
+    mark_expired_trades is called. Use this to preview before committing.
+
+    Args:
+        session: Database session
+
+    Returns:
+        List of expired trade candidates with projected P&L
+    """
+    service = TradeService(session)
+
+    candidates = await service.get_expired_candidates()
+
+    return {
+        "candidates": candidates,
+        "count": len(candidates),
+        "message": f"Found {len(candidates)} trades with expired options",
+    }
+
+
+@router.post("/expired/mark")
+async def mark_expired_trades(
+    session: AsyncSession = Depends(get_db),
+):
+    """Mark OPEN option trades as EXPIRED if their expiration has passed.
+
+    Options that expire worthless (OTM at expiration) don't generate closing
+    executions from IBKR. This endpoint finds such trades and marks them as
+    EXPIRED with appropriate P&L calculation.
+
+    For credit trades (sold options): realized P&L = premium received
+    For debit trades (bought options): realized P&L = -premium paid
+
+    Args:
+        session: Database session
+
+    Returns:
+        Statistics about trades marked and P&L impact
+    """
+    service = TradeService(session)
+
+    try:
+        stats = await service.mark_expired_trades()
+
+        return {
+            "trades_marked": stats["trades_marked"],
+            "total_pnl_impact": float(stats["total_pnl_impact"]),
+            "details": stats["details"],
+            "message": f"Marked {stats['trades_marked']} trades as EXPIRED",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to mark expired trades: {e}")
+
+
 @router.get("/{trade_id}", response_model=TradeResponse)
 async def get_trade(
     trade_id: int,
@@ -398,6 +459,43 @@ async def suggest_grouping(
         groups=[SuggestedGroup(**g) for g in groups],
         message=f"Suggested {len(groups)} trade groups",
     )
+
+
+@router.post("/process-new", response_model=TradeProcessResponse)
+async def process_new_executions(
+    session: AsyncSession = Depends(get_db),
+):
+    """Process only unassigned executions into trades.
+
+    This endpoint processes executions that don't have a trade assignment,
+    creating new trades without affecting existing ones. This is ideal for
+    processing newly synced executions.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Processing statistics
+    """
+    service = TradeGroupingService(session)
+
+    try:
+        stats = await service.process_new_executions()
+
+        message = (
+            f"Processed {stats['executions_processed']} new executions "
+            f"into {stats['trades_created']} trades."
+        )
+
+        return TradeProcessResponse(
+            executions_processed=stats["executions_processed"],
+            trades_created=stats["trades_created"],
+            trades_updated=stats["trades_updated"],
+            message=message,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
 
 @router.post("/reprocess-all", response_model=TradeProcessResponse)

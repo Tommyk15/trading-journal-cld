@@ -47,9 +47,23 @@ class TradeLedger:
             Unique leg key
         """
         if execution.security_type == "OPT":
-            expiry = execution.expiration.strftime("%Y%m%d") if execution.expiration else ""
+            expiry = self._normalize_expiration_date(execution.expiration)
             return f"{expiry}_{execution.strike}_{execution.option_type}"
         return "STK"
+
+    def _normalize_expiration_date(self, expiration: datetime | None) -> str:
+        """Normalize expiration datetime to YYYYMMDD string.
+
+        See TradeGroupingService._normalize_expiration_date for details.
+        """
+        if not expiration:
+            return ""
+
+        utc_hour = expiration.hour
+        if utc_hour >= 20:
+            expiration = expiration + timedelta(days=1)
+
+        return expiration.strftime("%Y%m%d")
 
     def add_execution(self, execution: Execution) -> None:
         """Add execution and update position ledger.
@@ -150,8 +164,11 @@ class TradeGroupingService:
             "trades_updated": 0,
         }
 
-        # Fetch executions
-        stmt = select(Execution).order_by(
+        # Fetch executions (excluding forex/cash)
+        stmt = select(Execution).where(
+            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
+        ).order_by(
             Execution.execution_time,
             Execution.underlying,
             Execution.security_type,
@@ -362,9 +379,43 @@ class TradeGroupingService:
     def _get_leg_key_from_exec(self, execution: Execution) -> str:
         """Get leg key from execution (same as TradeLedger.get_leg_key)."""
         if execution.security_type == "OPT":
-            expiry = execution.expiration.strftime("%Y%m%d") if execution.expiration else ""
+            expiry = self._normalize_expiration_date(execution.expiration)
             return f"{expiry}_{execution.strike}_{execution.option_type}"
         return "STK"
+
+    def _normalize_expiration_date(self, expiration: datetime | None) -> str:
+        """Normalize expiration datetime to YYYYMMDD string.
+
+        Options expire on a specific calendar date, but may be stored with
+        different times depending on the source timezone. This method
+        normalizes to the intended expiration date.
+
+        For example:
+        - 2025-12-19 00:00:00+02:00 (Israel) = 2025-12-18 22:00:00 UTC
+        - 2025-12-19 02:00:00+02:00 (Israel) = 2025-12-19 00:00:00 UTC
+
+        Both refer to options expiring on Dec 19, so we need to normalize.
+        We detect this by checking if the UTC time is after 20:00 (8 PM),
+        which indicates midnight in a timezone east of UTC like Israel (+2).
+
+        Args:
+            expiration: Expiration datetime
+
+        Returns:
+            Normalized date string in YYYYMMDD format
+        """
+        if not expiration:
+            return ""
+
+        # Get the UTC time components
+        utc_hour = expiration.hour  # Already in UTC if stored with timezone
+
+        # If UTC time is 20:00 or later (8 PM+), it's likely midnight or later
+        # in an eastern timezone (like Israel +2 or +3), so add a day
+        if utc_hour >= 20:
+            expiration = expiration + timedelta(days=1)
+
+        return expiration.strftime("%Y%m%d")
 
     def _update_cumulative_position(self, position: dict[str, int], execution: Execution) -> None:
         """Update cumulative position with an execution.
@@ -611,14 +662,67 @@ class TradeGroupingService:
         await self.session.flush()
         return trade
 
+    async def process_new_executions(self) -> dict:
+        """Process only unassigned executions into trades.
+
+        This method processes executions that have trade_id = NULL,
+        creating new trades without affecting existing ones.
+
+        Returns:
+            Dict with processing statistics
+        """
+        stats = {
+            "executions_processed": 0,
+            "trades_created": 0,
+            "trades_updated": 0,
+        }
+
+        # Fetch only unassigned executions (trade_id IS NULL), excluding forex/cash
+        stmt = select(Execution).where(
+            Execution.trade_id.is_(None),
+            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
+        ).order_by(
+            Execution.execution_time,
+            Execution.underlying,
+        )
+
+        result = await self.session.execute(stmt)
+        executions = list(result.scalars().all())
+        stats["executions_processed"] = len(executions)
+
+        if not executions:
+            return stats
+
+        # Group by underlying
+        by_underlying = defaultdict(list)
+        for exec in executions:
+            by_underlying[exec.underlying].append(exec)
+
+        # Process each underlying with position state machine
+        for underlying, execs in by_underlying.items():
+            state_machine = PositionStateMachine(underlying)
+            trade_groups = state_machine.process_executions(execs)
+
+            for group in trade_groups:
+                trade = await self._create_trade_from_group(group)
+                if trade:
+                    stats["trades_created"] += 1
+
+        await self.session.commit()
+        return stats
+
     async def reprocess_all_executions(self) -> dict:
         """Reprocess all executions using the improved state machine algorithm.
 
         This method:
-        1. Deletes all existing trades
-        2. Clears trade_id from all executions
-        3. Reprocesses all executions using the position state machine
-        4. Links rolls within the same day
+        1. Normalizes stock splits in executions
+        2. Deletes all existing trades
+        3. Clears trade_id from all executions
+        4. Reprocesses all executions using the position state machine
+        5. Links rolls within the same day
+        6. Assigns orphaned fractional shares to recent trades
+        7. Assigns currency conversions to a special excluded trade
 
         Returns:
             Dict with processing statistics
@@ -628,29 +732,50 @@ class TradeGroupingService:
             "executions_processed": 0,
             "trades_created": 0,
             "rolls_detected": 0,
+            "splits_normalized": 0,
+            "fractional_shares_assigned": 0,
+            "currency_conversions_excluded": 0,
         }
 
-        # Step 1: Delete all existing trades
+        # Step 1: Normalize stock splits before processing
+        from trading_journal.services.split_normalization_service import (
+            SplitNormalizationService,
+        )
+        split_service = SplitNormalizationService(self.session)
+        split_stats = await split_service.normalize_all_splits()
+        stats["splits_normalized"] = split_stats["executions_normalized"]
+
+        # Step 2: Delete all existing trades
         delete_stmt = delete(Trade)
         await self.session.execute(delete_stmt)
 
-        # Step 2: Clear trade_id from all executions
-        stmt = select(Execution)
+        # Step 3: Clear trade_id from all executions
+        clear_stmt = select(Execution)
+        clear_result = await self.session.execute(clear_stmt)
+        for exec in clear_result.scalars().all():
+            exec.trade_id = None
+        await self.session.flush()
+
+        # Step 4: Handle currency conversions - assign to special excluded trade
+        currency_excluded = await self._exclude_currency_conversions()
+        stats["currency_conversions_excluded"] = currency_excluded
+
+        # Step 5: Get tradeable executions (excluding forex/cash/currency pairs)
+        stmt = select(Execution).where(
+            Execution.trade_id.is_(None),  # Not already assigned
+            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
+        )
         result = await self.session.execute(stmt)
         executions = list(result.scalars().all())
-
-        for exec in executions:
-            exec.trade_id = None
-
-        await self.session.flush()
         stats["executions_processed"] = len(executions)
 
-        # Step 3: Group by underlying
+        # Step 6: Group by underlying
         by_underlying = defaultdict(list)
         for exec in executions:
             by_underlying[exec.underlying].append(exec)
 
-        # Step 4: Process each underlying with state machine
+        # Step 7: Process each underlying with state machine
         all_trades: list[Trade] = []
         roll_chain_counter = 1
 
@@ -696,6 +821,12 @@ class TradeGroupingService:
 
                     prev_trade = trade
 
+        await self.session.flush()
+
+        # Step 8: Assign orphaned fractional shares to recent trades
+        fractional_assigned = await self._assign_orphaned_fractional_shares()
+        stats["fractional_shares_assigned"] = fractional_assigned
+
         await self.session.commit()
 
         # Run split detection for stock trades
@@ -703,7 +834,142 @@ class TradeGroupingService:
         stats["split_issues_detected"] = split_report["issues_found"]
         stats["split_issues_auto_fixed"] = split_report.get("auto_fixed", 0)
 
+        # Step 9: Mark expired options as EXPIRED
+        from trading_journal.services.trade_service import TradeService
+        trade_service = TradeService(self.session)
+        expired_stats = await trade_service.mark_expired_trades()
+        stats["expired_trades_marked"] = expired_stats["trades_marked"]
+
         return stats
+
+    async def _assign_orphaned_fractional_shares(self) -> int:
+        """Assign orphaned fractional share executions to recent trades.
+
+        Fractional shares (quantity < 1) often occur as price improvement
+        rebates from IBKR and arrive slightly after the main trade closes.
+        This method finds these orphans and assigns them to the most recent
+        trade for that underlying.
+
+        Returns:
+            Number of fractional shares assigned
+        """
+        # Find orphaned fractional stock executions
+        stmt = select(Execution).where(
+            Execution.trade_id.is_(None),
+            Execution.security_type == "STK",
+            Execution.quantity < 1,
+        ).order_by(Execution.underlying, Execution.execution_time)
+
+        result = await self.session.execute(stmt)
+        fractional_orphans = list(result.scalars().all())
+
+        if not fractional_orphans:
+            return 0
+
+        assigned_count = 0
+
+        for orphan in fractional_orphans:
+            # Find the most recent trade for this underlying that closed
+            # within 30 minutes before or after this execution
+            time_window = timedelta(minutes=30)
+            earliest_time = orphan.execution_time - time_window
+            latest_time = orphan.execution_time + time_window
+
+            # Look for a trade that:
+            # 1. Is for the same underlying
+            # 2. Is a stock trade
+            # 3. Was closed within the time window
+            trade_stmt = select(Trade).where(
+                Trade.underlying == orphan.underlying,
+                Trade.strategy_type.in_(["Long Stock", "Short Stock"]),
+                Trade.closed_at.isnot(None),
+                Trade.closed_at >= earliest_time,
+                Trade.closed_at <= latest_time,
+            ).order_by(
+                # Prefer the trade closest in time
+                Trade.closed_at.desc()
+            ).limit(1)
+
+            trade_result = await self.session.execute(trade_stmt)
+            matching_trade = trade_result.scalar_one_or_none()
+
+            if matching_trade:
+                # Assign fractional share to this trade
+                orphan.trade_id = matching_trade.id
+                matching_trade.num_executions += 1
+                assigned_count += 1
+            else:
+                # Try to find any recent trade for this underlying (within 30 min)
+                # even if it's still open
+                trade_stmt = select(Trade).where(
+                    Trade.underlying == orphan.underlying,
+                    Trade.strategy_type.in_(["Long Stock", "Short Stock"]),
+                    Trade.opened_at <= orphan.execution_time,
+                ).order_by(
+                    Trade.opened_at.desc()
+                ).limit(1)
+
+                trade_result = await self.session.execute(trade_stmt)
+                matching_trade = trade_result.scalar_one_or_none()
+
+                if matching_trade:
+                    orphan.trade_id = matching_trade.id
+                    matching_trade.num_executions += 1
+                    assigned_count += 1
+
+        return assigned_count
+
+    async def _exclude_currency_conversions(self) -> int:
+        """Create a special trade for currency conversion executions.
+
+        Currency pairs (e.g., USD.ILS, EUR.USD) are forex transactions
+        that shouldn't be matched as securities trades. This method
+        creates a single "Currency Conversion" trade to hold them,
+        preventing them from appearing as orphans.
+
+        Returns:
+            Number of currency conversion executions assigned
+        """
+        # Find currency conversion executions (those with "." in underlying)
+        stmt = select(Execution).where(
+            Execution.underlying.contains("."),
+        )
+        result = await self.session.execute(stmt)
+        currency_execs = list(result.scalars().all())
+
+        if not currency_execs:
+            return 0
+
+        # Calculate aggregates
+        total_amount = sum(e.net_amount for e in currency_execs)
+        total_commission = sum(e.commission for e in currency_execs)
+        min_time = min(e.execution_time for e in currency_execs)
+        max_time = max(e.execution_time for e in currency_execs)
+
+        # Create special "Currency Conversion" trade
+        currency_trade = Trade(
+            underlying="FOREX",
+            strategy_type="Currency Conversion",
+            status="CLOSED",
+            opened_at=min_time,
+            closed_at=max_time,
+            realized_pnl=Decimal("0.00"),
+            unrealized_pnl=Decimal("0.00"),
+            total_pnl=Decimal("0.00"),
+            opening_cost=abs(total_amount) if total_amount < 0 else Decimal("0.00"),
+            closing_proceeds=abs(total_amount) if total_amount > 0 else Decimal("0.00"),
+            total_commission=total_commission,
+            num_legs=1,
+            num_executions=len(currency_execs),
+        )
+        self.session.add(currency_trade)
+        await self.session.flush()
+
+        # Assign all currency executions to this trade
+        for exec in currency_execs:
+            exec.trade_id = currency_trade.id
+
+        return len(currency_execs)
 
     async def _check_for_stock_splits(self) -> dict:
         """Check for stock split issues and auto-fix where possible.

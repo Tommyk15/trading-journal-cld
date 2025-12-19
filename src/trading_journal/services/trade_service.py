@@ -1,5 +1,6 @@
 """Trade service for manual trade operations."""
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -800,3 +801,141 @@ class TradeService:
             return "Four-Leg"
 
         return f"{len(legs)}-Leg Complex"
+
+    async def mark_expired_trades(self) -> dict:
+        """Mark OPEN option trades as EXPIRED if their expiration has passed.
+
+        Options that expire worthless (OTM at expiration) don't generate closing
+        executions from IBKR. This method finds such trades and marks them as
+        EXPIRED with appropriate P&L calculation.
+
+        Returns:
+            Dict with statistics: {trades_marked, total_pnl_impact}
+        """
+        stats = {
+            "trades_marked": 0,
+            "total_pnl_impact": Decimal("0.00"),
+            "details": [],
+        }
+
+        # Find all OPEN trades
+        stmt = select(Trade).where(Trade.status == "OPEN")
+        result = await self.session.execute(stmt)
+        open_trades = list(result.scalars().all())
+
+        today = datetime.now(UTC)
+
+        for trade in open_trades:
+            # Get executions for this trade to find expiration dates
+            exec_stmt = select(Execution).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            executions = list(exec_result.scalars().all())
+
+            # Find option executions and their expirations
+            option_expirations = []
+            for exec in executions:
+                if exec.security_type == "OPT" and exec.expiration:
+                    option_expirations.append(exec.expiration)
+
+            if not option_expirations:
+                # No options in this trade (probably stock), skip
+                continue
+
+            # Get the latest expiration date for this trade
+            latest_expiration = max(option_expirations)
+
+            # Normalize expiration to end of day (options expire at market close)
+            # Add a buffer of 1 day to account for after-hours processing
+            expiration_cutoff = latest_expiration.replace(
+                hour=23, minute=59, second=59
+            ) + timedelta(days=1)
+
+            if today > expiration_cutoff:
+                # This trade's options have expired
+                # Calculate P&L for worthless expiration
+
+                # For credit trades (opening_cost < 0): full credit is profit
+                # For debit trades (opening_cost > 0): full cost is loss
+                opening_cost = trade.opening_cost or Decimal("0.00")
+                total_commission = trade.total_commission or Decimal("0.00")
+
+                # When options expire worthless:
+                # - If you sold options (credit), you keep the premium = profit
+                # - If you bought options (debit), you lose the premium = loss
+                # P&L = -opening_cost - commission
+                # (opening_cost is negative for credits, positive for debits)
+                realized_pnl = -opening_cost - total_commission
+
+                # Update trade
+                trade.status = "EXPIRED"
+                trade.closed_at = latest_expiration
+                trade.realized_pnl = realized_pnl
+                trade.total_pnl = realized_pnl
+                trade.closing_proceeds = Decimal("0.00")  # Expired worthless
+
+                stats["trades_marked"] += 1
+                stats["total_pnl_impact"] += realized_pnl
+                stats["details"].append({
+                    "trade_id": trade.id,
+                    "underlying": trade.underlying,
+                    "strategy_type": trade.strategy_type,
+                    "expiration": latest_expiration.strftime("%Y-%m-%d"),
+                    "realized_pnl": float(realized_pnl),
+                })
+
+        if stats["trades_marked"] > 0:
+            await self.session.commit()
+
+        return stats
+
+    async def get_expired_candidates(self) -> list[dict]:
+        """Get list of OPEN trades that have expired options (for preview).
+
+        Returns:
+            List of trade details that would be marked as expired
+        """
+        candidates = []
+
+        stmt = select(Trade).where(Trade.status == "OPEN")
+        result = await self.session.execute(stmt)
+        open_trades = list(result.scalars().all())
+
+        today = datetime.now(UTC)
+
+        for trade in open_trades:
+            exec_stmt = select(Execution).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            executions = list(exec_result.scalars().all())
+
+            option_expirations = []
+            for exec in executions:
+                if exec.security_type == "OPT" and exec.expiration:
+                    option_expirations.append(exec.expiration)
+
+            if not option_expirations:
+                continue
+
+            latest_expiration = max(option_expirations)
+            expiration_cutoff = latest_expiration.replace(
+                hour=23, minute=59, second=59
+            ) + timedelta(days=1)
+
+            if today > expiration_cutoff:
+                opening_cost = trade.opening_cost or Decimal("0.00")
+                total_commission = trade.total_commission or Decimal("0.00")
+                realized_pnl = -opening_cost - total_commission
+
+                days_expired = (today - latest_expiration).days
+
+                candidates.append({
+                    "trade_id": trade.id,
+                    "underlying": trade.underlying,
+                    "strategy_type": trade.strategy_type,
+                    "opened_at": trade.opened_at.strftime("%Y-%m-%d") if trade.opened_at else None,
+                    "expiration": latest_expiration.strftime("%Y-%m-%d"),
+                    "days_expired": days_expired,
+                    "opening_cost": float(opening_cost),
+                    "projected_pnl": float(realized_pnl),
+                })
+
+        return candidates
