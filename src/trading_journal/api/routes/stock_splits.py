@@ -89,51 +89,7 @@ async def create_stock_split(
     return StockSplitResponse.model_validate(split)
 
 
-@router.get("/{split_id}", response_model=StockSplitResponse)
-async def get_stock_split(
-    split_id: int,
-    session: AsyncSession = Depends(get_db),
-):
-    """Get a specific stock split by ID.
-
-    Args:
-        split_id: Stock split database ID
-        session: Database session
-
-    Returns:
-        Stock split record
-    """
-    stmt = select(StockSplit).where(StockSplit.id == split_id)
-    result = await session.execute(stmt)
-    split = result.scalar_one_or_none()
-
-    if not split:
-        raise HTTPException(status_code=404, detail="Stock split not found")
-
-    return StockSplitResponse.model_validate(split)
-
-
-@router.delete("/{split_id}", status_code=204)
-async def delete_stock_split(
-    split_id: int,
-    session: AsyncSession = Depends(get_db),
-):
-    """Delete a stock split record.
-
-    Args:
-        split_id: Stock split database ID
-        session: Database session
-    """
-    stmt = select(StockSplit).where(StockSplit.id == split_id)
-    result = await session.execute(stmt)
-    split = result.scalar_one_or_none()
-
-    if not split:
-        raise HTTPException(status_code=404, detail="Stock split not found")
-
-    await session.delete(split)
-    await session.commit()
-
+# NOTE: Specific path routes must be defined BEFORE parameterized routes like /{split_id}
 
 @router.get("/symbol/{symbol}", response_model=StockSplitList)
 async def get_splits_for_symbol(
@@ -218,6 +174,52 @@ async def check_unnormalized_splits(
         **report,
         "message": f"Found {report['total_suspicious']} executions that may need normalization",
     }
+
+
+@router.get("/{split_id}", response_model=StockSplitResponse)
+async def get_stock_split(
+    split_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get a specific stock split by ID.
+
+    Args:
+        split_id: Stock split database ID
+        session: Database session
+
+    Returns:
+        Stock split record
+    """
+    stmt = select(StockSplit).where(StockSplit.id == split_id)
+    result = await session.execute(stmt)
+    split = result.scalar_one_or_none()
+
+    if not split:
+        raise HTTPException(status_code=404, detail="Stock split not found")
+
+    return StockSplitResponse.model_validate(split)
+
+
+@router.delete("/{split_id}", status_code=204)
+async def delete_stock_split(
+    split_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Delete a stock split record.
+
+    Args:
+        split_id: Stock split database ID
+        session: Database session
+    """
+    stmt = select(StockSplit).where(StockSplit.id == split_id)
+    result = await session.execute(stmt)
+    split = result.scalar_one_or_none()
+
+    if not split:
+        raise HTTPException(status_code=404, detail="Stock split not found")
+
+    await session.delete(split)
+    await session.commit()
 
 
 @router.post("/normalize/all")

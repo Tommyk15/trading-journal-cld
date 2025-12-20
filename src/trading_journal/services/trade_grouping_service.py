@@ -7,11 +7,12 @@ This module uses a position state machine approach to correctly identify trade b
 4. Detects stock splits that may affect position tracking
 """
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import Date, case, cast, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
@@ -22,6 +23,8 @@ from trading_journal.services.position_state_machine import (
     classify_strategy_from_opening,
 )
 from trading_journal.services.split_detection_service import SplitDetectionService
+
+logger = logging.getLogger(__name__)
 
 
 class TradeLedger:
@@ -576,6 +579,7 @@ class TradeGroupingService:
             "num_legs": len(legs),
             "num_executions": len(ledger.executions),
             "executions": ledger.executions,  # Include executions for trade_id assignment
+            "greeks_pending": False,  # Greeks auto-fetch disabled
         }
 
     def _classify_strategy(self, legs: dict) -> str:
@@ -761,6 +765,14 @@ class TradeGroupingService:
                     stats["trades_created"] += 1
 
         await self.session.commit()
+
+        # Auto-fetch Greeks for newly created option trades
+        # DISABLED: Rate limiting makes this too slow. Revisit approach.
+        # if stats["trades_created"] > 0:
+        #     greeks_stats = await self.fetch_greeks_for_pending_trades()
+        #     stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
+        #     stats["greeks_failed"] = greeks_stats["trades_failed"]
+
         return stats
 
     async def reprocess_all_executions(self) -> dict:
@@ -786,17 +798,29 @@ class TradeGroupingService:
             "splits_normalized": 0,
             "fractional_shares_assigned": 0,
             "currency_conversions_excluded": 0,
+            "tags_restored": 0,
         }
 
-        # Step 1: Normalize stock splits before processing
-        from trading_journal.services.split_normalization_service import (
-            SplitNormalizationService,
-        )
-        split_service = SplitNormalizationService(self.session)
-        split_stats = await split_service.normalize_all_splits()
-        stats["splits_normalized"] = split_stats["executions_normalized"]
+        # Step 0: Preserve tag associations before deleting trades
+        # Map execution_ids (as frozenset) -> list of tag_ids
+        tag_mapping = await self._save_tag_associations()
+        logger.info(f"Saved tag associations for {len(tag_mapping)} trades")
 
-        # Step 2: Delete all existing trades
+        # Step 0.5: Preserve Greeks data before deleting trades
+        greeks_mapping = await self._save_greeks_data()
+        logger.info(f"Saved Greeks data for {len(greeks_mapping)} trades")
+
+        # Step 1: Normalize stock splits before processing
+        # TODO: Fix overflow issues with currency trades and high-value splits
+        # from trading_journal.services.split_normalization_service import (
+        #     SplitNormalizationService,
+        # )
+        # split_service = SplitNormalizationService(self.session)
+        # split_stats = await split_service.normalize_all_splits()
+        # stats["splits_normalized"] = split_stats["executions_normalized"]
+        stats["splits_normalized"] = 0  # Temporarily disabled
+
+        # Step 2: Delete all existing trades (CASCADE will delete trade_tags)
         delete_stmt = delete(Trade)
         await self.session.execute(delete_stmt)
 
@@ -874,9 +898,32 @@ class TradeGroupingService:
 
         await self.session.flush()
 
+        # Step 7.5: Link assignments by timestamp matching
+        # This handles cases where prev_trade wasn't the correct option trade
+        assignments_linked = await self._link_assignments_by_timestamp()
+        stats["assignments_linked"] = assignments_linked
+        logger.info(f"Linked {assignments_linked} assignment trades")
+
+        # Step 7.6: Close trades with offsetting residual positions
+        # When executions can't be perfectly split, we may have trades with
+        # offsetting positions (+N and -N) that should net to 0
+        offsetting_closed = await self._close_offsetting_residual_trades()
+        stats["offsetting_trades_closed"] = offsetting_closed
+        logger.info(f"Closed {offsetting_closed} trades with offsetting residual positions")
+
         # Step 8: Assign orphaned fractional shares to recent trades
         fractional_assigned = await self._assign_orphaned_fractional_shares()
         stats["fractional_shares_assigned"] = fractional_assigned
+
+        # Step 8.5: Restore tag associations to newly created trades
+        tags_restored = await self._restore_tag_associations(tag_mapping)
+        stats["tags_restored"] = tags_restored
+        logger.info(f"Restored tags to {tags_restored} trades")
+
+        # Step 8.6: Restore Greeks data to newly created trades
+        greeks_restored = await self._restore_greeks_data(greeks_mapping)
+        stats["greeks_restored"] = greeks_restored
+        logger.info(f"Restored Greeks to {greeks_restored} trades")
 
         await self.session.commit()
 
@@ -890,6 +937,14 @@ class TradeGroupingService:
         trade_service = TradeService(self.session)
         expired_stats = await trade_service.mark_expired_trades()
         stats["expired_trades_marked"] = expired_stats["trades_marked"]
+
+        # Step 10: Auto-fetch Greeks for newly created option trades
+        # DISABLED: Rate limiting makes this too slow. Revisit approach.
+        # greeks_stats = await self.fetch_greeks_for_pending_trades()
+        # stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
+        # stats["greeks_failed"] = greeks_stats["trades_failed"]
+        stats["greeks_fetched"] = 0
+        stats["greeks_failed"] = 0
 
         return stats
 
@@ -1022,6 +1077,262 @@ class TradeGroupingService:
 
         return len(currency_execs)
 
+    async def _link_assignments_by_timestamp(self) -> int:
+        """Link assignment trades to their source option trades by timestamp.
+
+        When an option is assigned/exercised:
+        - The option is closed (often at $0)
+        - Stock is acquired (put assignment) or delivered (call assignment)
+        - Both happen at the same timestamp
+
+        This method finds stock trades marked as assignments and links them
+        to the option trade that closed at the same time.
+
+        For put assignments (Short Put -> Long Stock):
+        - Adjusted cost basis = Strike price - Premium received
+        - opening_cost is adjusted to reflect the net cost
+
+        For call assignments (Long Call -> Short Stock or Short Call -> delivered stock):
+        - Similar adjustment for premium paid/received
+
+        Returns:
+            Number of assignments linked
+        """
+        linked_count = 0
+
+        # Find all stock trades that might be assignments
+        # Look for Long Stock trades that opened at the same time an option closed
+        stock_stmt = select(Trade).where(
+            Trade.strategy_type.in_(["Long Stock", "Short Stock"]),
+            Trade.status == "OPEN",
+        )
+        result = await self.session.execute(stock_stmt)
+        stock_trades = list(result.scalars().all())
+
+        for stock_trade in stock_trades:
+            # Skip if already linked
+            if stock_trade.assigned_from_trade_id is not None:
+                continue
+
+            # Find option trades for the same underlying that closed at the same time
+            option_stmt = select(Trade).where(
+                Trade.underlying == stock_trade.underlying,
+                Trade.strategy_type.in_(["Short Put", "Long Put", "Short Call", "Long Call"]),
+                Trade.status == "CLOSED",
+                Trade.closed_at == stock_trade.opened_at,  # Same timestamp
+            )
+            option_result = await self.session.execute(option_stmt)
+            option_trades = list(option_result.scalars().all())
+
+            if option_trades:
+                # Link to the first matching option trade
+                option_trade = option_trades[0]
+                stock_trade.is_assignment = True
+                stock_trade.assigned_from_trade_id = option_trade.id
+
+                # Adjust cost basis based on option premium
+                # For Short Put assignment: cost basis = strike - premium received
+                # The option trade's closing_proceeds contains the premium received (SLD)
+                # and opening_cost contains the cost to close (BOT at $0)
+                if option_trade.strategy_type == "Short Put":
+                    # Premium received = closing_proceeds (what we got when we sold the put)
+                    # For a short put, closing_proceeds is the premium received
+                    premium_received = option_trade.closing_proceeds
+                    original_cost = stock_trade.opening_cost
+                    adjusted_cost = original_cost - premium_received
+                    stock_trade.opening_cost = adjusted_cost
+
+                    logger.info(
+                        f"Adjusted assignment cost basis for {stock_trade.underlying}: "
+                        f"${original_cost:.2f} - ${premium_received:.2f} premium = ${adjusted_cost:.2f}"
+                    )
+                elif option_trade.strategy_type == "Long Put":
+                    # For exercising a long put, we paid premium
+                    premium_paid = option_trade.opening_cost
+                    original_cost = stock_trade.opening_cost
+                    # Actually for long put exercise, we're selling stock, not buying
+                    # This case is less common, skip for now
+                    pass
+                elif option_trade.strategy_type == "Short Call":
+                    # For short call assignment, we deliver stock and receive strike
+                    # Premium received adds to our proceeds
+                    premium_received = option_trade.closing_proceeds
+                    # This would affect closing_proceeds for the stock trade
+                    pass
+                elif option_trade.strategy_type == "Long Call":
+                    # For long call exercise, we pay strike to receive stock
+                    # Premium paid increases our cost basis
+                    premium_paid = option_trade.opening_cost
+                    original_cost = stock_trade.opening_cost
+                    adjusted_cost = original_cost + premium_paid
+                    stock_trade.opening_cost = adjusted_cost
+
+                    logger.info(
+                        f"Adjusted assignment cost basis for {stock_trade.underlying}: "
+                        f"${original_cost:.2f} + ${premium_paid:.2f} premium = ${adjusted_cost:.2f}"
+                    )
+
+                linked_count += 1
+                logger.info(
+                    f"Linked assignment: {stock_trade.underlying} stock trade {stock_trade.id} "
+                    f"from option trade {option_trade.id} ({option_trade.strategy_type})"
+                )
+
+        return linked_count
+
+    async def _close_offsetting_residual_trades(self) -> int:
+        """Close trades with residual positions that offset to zero.
+
+        When closing executions can't be perfectly split across multiple trades
+        (because individual executions can't be split), we may end up with:
+        - Trade A: +N at leg X (over-closed)
+        - Trade B: -N at leg X (not fully closed)
+
+        If the total position for a leg across all trades is 0, we should close
+        any OPEN trades that only have residual positions in legs where the
+        overall position is 0.
+
+        Returns:
+            Number of trades closed
+        """
+        closed_count = 0
+
+        # Find all legs where total position across all executions is 0
+        # but there are still OPEN trades with that leg
+        # Note: Use cast to DATE to handle timezone/DST differences in expiration timestamps
+        exp_date = cast(Execution.expiration, Date)
+        leg_totals_stmt = (
+            select(
+                Execution.underlying,
+                Execution.strike,
+                exp_date.label("exp_date"),
+                Execution.option_type,
+                func.sum(
+                    case(
+                        (Execution.side == "BOT", Execution.quantity),
+                        else_=-Execution.quantity
+                    )
+                ).label("net_qty")
+            )
+            .where(Execution.security_type == "OPT")
+            .group_by(
+                Execution.underlying,
+                Execution.strike,
+                exp_date,
+                Execution.option_type
+            )
+            .having(
+                func.sum(
+                    case(
+                        (Execution.side == "BOT", Execution.quantity),
+                        else_=-Execution.quantity
+                    )
+                ) == 0
+            )
+        )
+
+        result = await self.session.execute(leg_totals_stmt)
+        zero_legs = list(result.all())
+
+        for leg in zero_legs:
+            underlying, strike, expiration_date, option_type = leg[0], leg[1], leg[2], leg[3]
+
+            # Find OPEN trades with this leg that have non-zero position
+            # Use date comparison to handle timezone/DST differences
+            trades_stmt = (
+                select(Trade)
+                .join(Execution, Execution.trade_id == Trade.id)
+                .where(
+                    Trade.status == "OPEN",
+                    Execution.underlying == underlying,
+                    Execution.strike == strike,
+                    cast(Execution.expiration, Date) == expiration_date,
+                    Execution.option_type == option_type
+                )
+                .distinct()
+            )
+            trades_result = await self.session.execute(trades_stmt)
+            open_trades = list(trades_result.scalars().all())
+
+            for trade in open_trades:
+                # Check if ALL legs in this trade are either:
+                # 1. At zero position, OR
+                # 2. Part of a leg where overall position is 0
+                all_legs_balanced = True
+
+                # Get all legs in this trade (use date comparison for expiration)
+                legs_stmt = (
+                    select(
+                        Execution.strike,
+                        cast(Execution.expiration, Date).label("exp_date"),
+                        Execution.option_type,
+                        func.sum(
+                            case(
+                                (Execution.side == "BOT", Execution.quantity),
+                                else_=-Execution.quantity
+                            )
+                        ).label("net_qty")
+                    )
+                    .where(
+                        Execution.trade_id == trade.id,
+                        Execution.security_type == "OPT"
+                    )
+                    .group_by(
+                        Execution.strike,
+                        cast(Execution.expiration, Date),
+                        Execution.option_type
+                    )
+                )
+                legs_result = await self.session.execute(legs_stmt)
+                trade_legs = list(legs_result.all())
+
+                for trade_leg in trade_legs:
+                    t_strike, t_exp_date, t_type, t_net = trade_leg
+                    if t_net != 0:
+                        # Check if this leg's overall position is 0 (use date comparison)
+                        overall_stmt = (
+                            select(
+                                func.sum(
+                                    case(
+                                        (Execution.side == "BOT", Execution.quantity),
+                                        else_=-Execution.quantity
+                                    )
+                                )
+                            )
+                            .where(
+                                Execution.underlying == trade.underlying,
+                                Execution.strike == t_strike,
+                                cast(Execution.expiration, Date) == t_exp_date,
+                                Execution.option_type == t_type
+                            )
+                        )
+                        overall_result = await self.session.execute(overall_stmt)
+                        overall_net = overall_result.scalar()
+
+                        if overall_net != 0:
+                            all_legs_balanced = False
+                            break
+
+                if all_legs_balanced:
+                    # Close this trade
+                    trade.status = "CLOSED"
+                    # Set closed_at to the latest execution time in the trade
+                    exec_stmt = (
+                        select(func.max(Execution.execution_time))
+                        .where(Execution.trade_id == trade.id)
+                    )
+                    exec_result = await self.session.execute(exec_stmt)
+                    latest_exec = exec_result.scalar()
+                    if latest_exec:
+                        trade.closed_at = latest_exec
+                    closed_count += 1
+                    logger.info(
+                        f"Closed trade {trade.id} ({trade.underlying} {trade.strategy_type}) "
+                        f"with offsetting residual position"
+                    )
+
+        return closed_count
+
     async def _check_for_stock_splits(self) -> dict:
         """Check for stock split issues and auto-fix where possible.
 
@@ -1088,11 +1399,11 @@ class TradeGroupingService:
             closing_proceeds = Decimal("0.00")
             realized_pnl = Decimal("0.00")
 
-        # Count unique legs
+        # Count unique legs (use normalized expiration to handle timezone differences)
         leg_keys = set()
         for exec in executions:
             if exec.security_type == "OPT":
-                expiry = exec.expiration.strftime("%Y%m%d") if exec.expiration else ""
+                expiry = self._normalize_expiration_date(exec.expiration)
                 leg_key = f"{expiry}_{exec.strike}_{exec.option_type}"
             else:
                 leg_key = "STK"
@@ -1116,6 +1427,7 @@ class TradeGroupingService:
             num_executions=len(executions),
             is_roll=group.roll_type == "ROLL" and not group.is_assignment,
             is_assignment=group.is_assignment,
+            greeks_pending=False,  # Greeks auto-fetch disabled
         )
 
         self.session.add(trade)
@@ -1126,3 +1438,492 @@ class TradeGroupingService:
             exec.trade_id = trade.id
 
         return trade
+
+    async def _save_tag_associations(self) -> dict[frozenset[int], list[int]]:
+        """Save tag associations before deleting trades.
+
+        Maps execution IDs (as frozenset) to tag IDs so tags can be restored
+        after trades are recreated.
+
+        Returns:
+            Dict mapping frozenset of execution_ids to list of tag_ids
+        """
+        from sqlalchemy.orm import selectinload
+
+        tag_mapping: dict[frozenset[int], list[int]] = {}
+
+        # Get all trades with their tags and executions
+        stmt = (
+            select(Trade)
+            .options(selectinload(Trade.tag_list))
+            .where(Trade.num_executions > 0)
+        )
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        for trade in trades:
+            if not trade.tag_list:
+                continue
+
+            # Get execution IDs for this trade
+            exec_stmt = select(Execution.id).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            exec_ids = frozenset(exec_result.scalars().all())
+
+            if exec_ids:
+                tag_ids = [tag.id for tag in trade.tag_list]
+                tag_mapping[exec_ids] = tag_ids
+
+        return tag_mapping
+
+    async def _restore_tag_associations(
+        self, tag_mapping: dict[frozenset[int], list[int]]
+    ) -> int:
+        """Restore tag associations to newly created trades.
+
+        Args:
+            tag_mapping: Dict mapping frozenset of execution_ids to list of tag_ids
+
+        Returns:
+            Number of trades with restored tags
+        """
+        from trading_journal.models.tag import Tag
+
+        if not tag_mapping:
+            return 0
+
+        restored_count = 0
+
+        # Get all trades with their executions
+        stmt = select(Trade).where(Trade.num_executions > 0)
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        for trade in trades:
+            # Get execution IDs for this trade
+            exec_stmt = select(Execution.id).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            exec_ids = frozenset(exec_result.scalars().all())
+
+            # Check if we have saved tags for these execution IDs
+            if exec_ids in tag_mapping:
+                tag_ids = tag_mapping[exec_ids]
+
+                # Get the Tag objects
+                tag_stmt = select(Tag).where(Tag.id.in_(tag_ids))
+                tag_result = await self.session.execute(tag_stmt)
+                tags = list(tag_result.scalars().all())
+
+                # Add tags to trade
+                trade.tag_list.extend(tags)
+                restored_count += 1
+
+        return restored_count
+
+    async def _save_greeks_data(self) -> dict[frozenset[int], dict]:
+        """Save Greeks data before deleting trades.
+
+        Maps execution IDs (as frozenset) to Greeks data so it can be restored
+        after trades are recreated.
+
+        Returns:
+            Dict mapping frozenset of execution_ids to Greeks data dict
+        """
+        from trading_journal.models.trade_leg_greeks import TradeLegGreeks
+
+        greeks_mapping: dict[frozenset[int], dict] = {}
+
+        # Get all trades that have Greeks data
+        stmt = (
+            select(Trade)
+            .where(
+                Trade.num_executions > 0,
+                Trade.greeks_source.isnot(None),  # Has fetched Greeks
+            )
+        )
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        for trade in trades:
+            # Get execution IDs for this trade
+            exec_stmt = select(Execution.id).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            exec_ids = frozenset(exec_result.scalars().all())
+
+            if not exec_ids:
+                continue
+
+            # Get leg Greeks for this trade
+            leg_stmt = select(TradeLegGreeks).where(TradeLegGreeks.trade_id == trade.id)
+            leg_result = await self.session.execute(leg_stmt)
+            leg_greeks = list(leg_result.scalars().all())
+
+            # Save trade-level Greeks and leg Greeks
+            greeks_mapping[exec_ids] = {
+                "trade_greeks": {
+                    "underlying_price_open": trade.underlying_price_open,
+                    "delta_open": trade.delta_open,
+                    "gamma_open": trade.gamma_open,
+                    "theta_open": trade.theta_open,
+                    "vega_open": trade.vega_open,
+                    "iv_open": trade.iv_open,
+                    "greeks_source": trade.greeks_source,
+                    "greeks_pending": False,  # Already fetched
+                },
+                "leg_greeks": [
+                    {
+                        "snapshot_type": lg.snapshot_type,
+                        "leg_index": lg.leg_index,
+                        "underlying": lg.underlying,
+                        "option_type": lg.option_type,
+                        "strike": lg.strike,
+                        "expiration": lg.expiration,
+                        "quantity": lg.quantity,
+                        "delta": lg.delta,
+                        "gamma": lg.gamma,
+                        "theta": lg.theta,
+                        "vega": lg.vega,
+                        "rho": lg.rho,
+                        "iv": lg.iv,
+                        "underlying_price": lg.underlying_price,
+                        "option_price": lg.option_price,
+                        "bid": lg.bid,
+                        "ask": lg.ask,
+                        "bid_ask_spread": lg.bid_ask_spread,
+                        "open_interest": lg.open_interest,
+                        "volume": lg.volume,
+                        "data_source": lg.data_source,
+                        "captured_at": lg.captured_at,
+                    }
+                    for lg in leg_greeks
+                ],
+            }
+
+        return greeks_mapping
+
+    async def _restore_greeks_data(
+        self, greeks_mapping: dict[frozenset[int], dict]
+    ) -> int:
+        """Restore Greeks data to newly created trades.
+
+        Args:
+            greeks_mapping: Dict mapping frozenset of execution_ids to Greeks data
+
+        Returns:
+            Number of trades with restored Greeks
+        """
+        from trading_journal.models.trade_leg_greeks import TradeLegGreeks
+
+        if not greeks_mapping:
+            return 0
+
+        restored_count = 0
+
+        # Get all trades
+        stmt = select(Trade).where(Trade.num_executions > 0)
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        for trade in trades:
+            # Get execution IDs for this trade
+            exec_stmt = select(Execution.id).where(Execution.trade_id == trade.id)
+            exec_result = await self.session.execute(exec_stmt)
+            exec_ids = frozenset(exec_result.scalars().all())
+
+            # Check if we have saved Greeks for these execution IDs
+            if exec_ids not in greeks_mapping:
+                continue
+
+            saved_data = greeks_mapping[exec_ids]
+
+            # Restore trade-level Greeks
+            trade_greeks = saved_data["trade_greeks"]
+            trade.underlying_price_open = trade_greeks["underlying_price_open"]
+            trade.delta_open = trade_greeks["delta_open"]
+            trade.gamma_open = trade_greeks["gamma_open"]
+            trade.theta_open = trade_greeks["theta_open"]
+            trade.vega_open = trade_greeks["vega_open"]
+            trade.iv_open = trade_greeks["iv_open"]
+            trade.greeks_source = trade_greeks["greeks_source"]
+            trade.greeks_pending = False  # Already has Greeks
+
+            # Restore leg Greeks
+            for lg_data in saved_data["leg_greeks"]:
+                # Ensure captured_at is timezone-aware
+                captured_at = lg_data["captured_at"]
+                if captured_at and captured_at.tzinfo is None:
+                    from datetime import timezone
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+
+                leg_greeks = TradeLegGreeks(
+                    trade_id=trade.id,
+                    snapshot_type=lg_data["snapshot_type"],
+                    leg_index=lg_data["leg_index"],
+                    underlying=lg_data["underlying"],
+                    option_type=lg_data["option_type"],
+                    strike=lg_data["strike"],
+                    expiration=lg_data["expiration"],
+                    quantity=lg_data["quantity"],
+                    delta=lg_data["delta"],
+                    gamma=lg_data["gamma"],
+                    theta=lg_data["theta"],
+                    vega=lg_data["vega"],
+                    rho=lg_data["rho"],
+                    iv=lg_data["iv"],
+                    underlying_price=lg_data["underlying_price"],
+                    option_price=lg_data["option_price"],
+                    bid=lg_data["bid"],
+                    ask=lg_data["ask"],
+                    bid_ask_spread=lg_data["bid_ask_spread"],
+                    open_interest=lg_data["open_interest"],
+                    volume=lg_data["volume"],
+                    data_source=lg_data["data_source"],
+                    captured_at=captured_at,
+                )
+                self.session.add(leg_greeks)
+
+            restored_count += 1
+
+        return restored_count
+
+    async def fetch_greeks_for_pending_trades(self, limit: int = 100) -> dict:
+        """Fetch Greeks from Polygon API for all trades with greeks_pending=True.
+
+        This method is called automatically after trade grouping to populate
+        Greeks data for newly created option trades.
+
+        Args:
+            limit: Maximum number of trades to process (to avoid API rate limits)
+
+        Returns:
+            Dict with statistics about fetched trades
+        """
+        from trading_journal.models.trade_leg_greeks import TradeLegGreeks
+        from trading_journal.services.fred_service import FredService
+        from trading_journal.services.polygon_service import PolygonService, PolygonServiceError
+        from trading_journal.services.trade_analytics_service import LegData, TradeAnalyticsService
+
+        stats = {
+            "trades_processed": 0,
+            "trades_succeeded": 0,
+            "trades_failed": 0,
+            "trades_skipped": 0,
+        }
+
+        # Get trades with pending Greeks - only OPEN trades
+        # (Closed/expired trades have options that Polygon may not have data for)
+        stmt = (
+            select(Trade)
+            .where(
+                Trade.greeks_pending == True,  # noqa: E712
+                Trade.status == "OPEN",  # Only fetch for open trades
+            )
+            .order_by(Trade.opened_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        trades = list(result.scalars().all())
+
+        if not trades:
+            logger.info("No trades with pending Greeks to fetch")
+            return stats
+
+        logger.info(f"Fetching Greeks for {len(trades)} pending trades")
+
+        # Get risk-free rate once for all calculations
+        try:
+            async with FredService() as fred:
+                rate_data = await fred.get_risk_free_rate()
+                risk_free_rate = rate_data.rate
+        except Exception:
+            risk_free_rate = Decimal("0.05")
+
+        try:
+            async with PolygonService() as polygon:
+                for trade in trades:
+                    stats["trades_processed"] += 1
+                    try:
+                        success = await self._fetch_greeks_for_trade(
+                            trade, polygon, risk_free_rate
+                        )
+                        if success:
+                            stats["trades_succeeded"] += 1
+                        else:
+                            stats["trades_skipped"] += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch Greeks for trade {trade.id}: {e}")
+                        stats["trades_failed"] += 1
+                        trade.greeks_pending = False  # Mark as processed even if failed
+
+        except PolygonServiceError as e:
+            logger.error(f"Polygon API error: {e}")
+
+        await self.session.commit()
+        logger.info(
+            f"Greeks fetch complete: {stats['trades_succeeded']} succeeded, "
+            f"{stats['trades_failed']} failed, {stats['trades_skipped']} skipped"
+        )
+
+        return stats
+
+    async def _fetch_greeks_for_trade(
+        self,
+        trade: Trade,
+        polygon: "PolygonService",
+        risk_free_rate: Decimal,
+    ) -> bool:
+        """Fetch Greeks for a single trade from Polygon.
+
+        Args:
+            trade: Trade to fetch Greeks for
+            polygon: PolygonService instance
+            risk_free_rate: Current risk-free rate
+
+        Returns:
+            True if successfully fetched, False if skipped (no option legs)
+        """
+        from trading_journal.models.trade_leg_greeks import TradeLegGreeks
+        from trading_journal.services.trade_analytics_service import LegData, TradeAnalyticsService
+
+        # Get executions for this trade
+        exec_stmt = (
+            select(Execution)
+            .where(Execution.trade_id == trade.id)
+            .order_by(Execution.execution_time)
+        )
+        result = await self.session.execute(exec_stmt)
+        executions = list(result.scalars().all())
+
+        if not executions:
+            trade.greeks_pending = False
+            return False
+
+        # Build unique legs from executions
+        # Use normalized expiration date in key to handle timezone/DST differences
+        legs_map: dict[tuple, dict] = {}
+
+        if trade.status == "CLOSED":
+            # For closed trades, look at opening transactions
+            for exec in executions:
+                if exec.option_type and exec.strike and exec.expiration:
+                    if exec.open_close_indicator == "O":
+                        # Use normalized expiration for grouping, but keep original for API calls
+                        exp_normalized = self._normalize_expiration_date(exec.expiration)
+                        key = (exec.option_type, exec.strike, exp_normalized)
+                        if key not in legs_map:
+                            legs_map[key] = {
+                                "option_type": exec.option_type,
+                                "strike": exec.strike,
+                                "expiration": exec.expiration,
+                                "quantity": 0,
+                            }
+                        if exec.side == "BOT":
+                            legs_map[key]["quantity"] += exec.quantity
+                        else:
+                            legs_map[key]["quantity"] -= exec.quantity
+            active_legs = list(legs_map.values())
+        else:
+            # For open trades, use net position
+            for exec in executions:
+                if exec.option_type and exec.strike and exec.expiration:
+                    # Use normalized expiration for grouping, but keep original for API calls
+                    exp_normalized = self._normalize_expiration_date(exec.expiration)
+                    key = (exec.option_type, exec.strike, exp_normalized)
+                    if key not in legs_map:
+                        legs_map[key] = {
+                            "option_type": exec.option_type,
+                            "strike": exec.strike,
+                            "expiration": exec.expiration,
+                            "quantity": 0,
+                        }
+                    if exec.side == "BOT":
+                        legs_map[key]["quantity"] += exec.quantity
+                    else:
+                        legs_map[key]["quantity"] -= exec.quantity
+            active_legs = [v for v in legs_map.values() if v["quantity"] != 0]
+
+        if not active_legs:
+            trade.greeks_pending = False
+            return False
+
+        # Fetch Greeks from Polygon
+        leg_data_list: list[LegData] = []
+
+        # Get underlying price
+        quote = await polygon.get_underlying_price(trade.underlying)
+        underlying_price = quote.price if quote else None
+
+        for idx, leg in enumerate(active_legs):
+            greeks = await polygon.get_option_greeks(
+                underlying=trade.underlying,
+                expiration=leg["expiration"],
+                option_type=leg["option_type"],
+                strike=leg["strike"],
+                fetch_underlying_price=False,
+            )
+
+            if greeks:
+                leg_data_list.append(
+                    LegData(
+                        option_type=leg["option_type"],
+                        strike=leg["strike"],
+                        expiration=leg["expiration"],
+                        quantity=leg["quantity"],
+                        delta=greeks.delta,
+                        gamma=greeks.gamma,
+                        theta=greeks.theta,
+                        vega=greeks.vega,
+                        iv=greeks.iv,
+                    )
+                )
+
+                # Store leg Greeks
+                # Ensure timestamp is timezone-aware
+                from datetime import timezone
+                captured_at = greeks.timestamp
+                if captured_at and captured_at.tzinfo is None:
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+
+                leg_greeks = TradeLegGreeks(
+                    trade_id=trade.id,
+                    snapshot_type="OPEN",
+                    leg_index=idx,
+                    underlying=trade.underlying,
+                    option_type=leg["option_type"],
+                    strike=leg["strike"],
+                    expiration=leg["expiration"],
+                    quantity=leg["quantity"],
+                    delta=greeks.delta,
+                    gamma=greeks.gamma,
+                    theta=greeks.theta,
+                    vega=greeks.vega,
+                    iv=greeks.iv,
+                    underlying_price=underlying_price,
+                    option_price=greeks.option_price,
+                    bid=greeks.bid,
+                    ask=greeks.ask,
+                    bid_ask_spread=greeks.bid_ask_spread,
+                    open_interest=greeks.open_interest,
+                    volume=greeks.volume,
+                    data_source="POLYGON",
+                    captured_at=captured_at,
+                )
+                self.session.add(leg_greeks)
+
+        # Calculate trade-level analytics
+        if leg_data_list:
+            analytics_service = TradeAnalyticsService(risk_free_rate=risk_free_rate)
+            net_greeks = analytics_service.calculate_net_greeks(leg_data_list, multiplier=1)
+            trade_iv = analytics_service.get_trade_iv(leg_data_list, trade.strategy_type)
+
+            # Update trade with analytics
+            trade.underlying_price_open = underlying_price
+            trade.delta_open = net_greeks["net_delta"]
+            trade.gamma_open = net_greeks["net_gamma"]
+            trade.theta_open = net_greeks["net_theta"]
+            trade.vega_open = net_greeks["net_vega"]
+            trade.iv_open = trade_iv
+            trade.greeks_source = "POLYGON"
+
+        trade.greeks_pending = False
+        return len(leg_data_list) > 0

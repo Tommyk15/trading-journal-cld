@@ -14,8 +14,10 @@ from trading_journal.config import get_settings
 settings = get_settings()
 
 # IBKR Flex Query API endpoints
-FLEX_REQUEST_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
-FLEX_FETCH_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
+# Note: IBKR uses regional endpoints (gdcdyn, ndcdyn, etc.)
+# Using ndcdyn which is the current working endpoint (Dec 2024)
+FLEX_REQUEST_URL = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
+FLEX_FETCH_URL = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
 
 
 class FlexQueryService:

@@ -514,9 +514,13 @@ async def process_new_executions(
     try:
         stats = await service.process_new_executions()
 
+        greeks_msg = ""
+        if stats.get("greeks_fetched"):
+            greeks_msg = f" Fetched Greeks for {stats['greeks_fetched']} trades."
+
         message = (
             f"Processed {stats['executions_processed']} new executions "
-            f"into {stats['trades_created']} trades."
+            f"into {stats['trades_created']} trades.{greeks_msg}"
         )
 
         return TradeProcessResponse(
@@ -524,6 +528,8 @@ async def process_new_executions(
             trades_created=stats["trades_created"],
             trades_updated=stats["trades_updated"],
             message=message,
+            greeks_fetched=stats.get("greeks_fetched"),
+            greeks_failed=stats.get("greeks_failed"),
         )
 
     except Exception as e:
@@ -541,6 +547,7 @@ async def reprocess_all_trades(
     2. Clears trade assignments from all executions
     3. Reprocesses all executions using the new position state machine
     4. Detects and links roll chains
+    5. Auto-fetches Greeks for option trades from Polygon
 
     WARNING: This is a destructive operation that deletes all existing trades.
 
@@ -555,10 +562,14 @@ async def reprocess_all_trades(
     try:
         stats = await service.reprocess_all_executions()
 
+        greeks_msg = ""
+        if stats.get("greeks_fetched"):
+            greeks_msg = f" Fetched Greeks for {stats['greeks_fetched']} trades."
+
         message = (
             f"Reprocessed {stats['executions_processed']} executions "
             f"into {stats['trades_created']} trades. "
-            f"Detected {stats['rolls_detected']} rolls."
+            f"Detected {stats['rolls_detected']} rolls.{greeks_msg}"
         )
 
         return TradeProcessResponse(
@@ -566,6 +577,8 @@ async def reprocess_all_trades(
             trades_created=stats["trades_created"],
             trades_updated=0,
             message=message,
+            greeks_fetched=stats.get("greeks_fetched"),
+            greeks_failed=stats.get("greeks_failed"),
         )
 
     except Exception as e:

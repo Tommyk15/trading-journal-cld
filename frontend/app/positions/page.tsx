@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Header, ActionButton } from '@/components/layout/Header';
 import { api } from '@/lib/api/client';
 import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
-import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box, ArrowUpDown, ArrowUp, ArrowDown, Search, X } from 'lucide-react';
 
 // Stock split type for adjustment calculations
 interface StockSplit {
@@ -61,6 +61,14 @@ export default function PositionsPage() {
   const [tradeExecutions, setTradeExecutions] = useState<Record<number, TradeExecution[]>>({});
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [stockSplits, setStockSplits] = useState<Record<string, StockSplit[]>>({});
+
+  // Sorting and filtering state
+  type SortColumn = 'date' | 'ticker' | 'qty' | 'strategy' | 'dte' | 'value' | 'commission' | null;
+  type SortDirection = 'asc' | 'desc';
+  const [sortColumn, setSortColumn] = useState<SortColumn>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [filterTicker, setFilterTicker] = useState('');
+  const [filterStrategy, setFilterStrategy] = useState('');
 
   // Apply split adjustments to quantity based on execution date
   function applyQuantitySplitAdjustment(symbol: string, quantity: number, executionDate: string): number {
@@ -183,19 +191,203 @@ export default function PositionsPage() {
     return openingCost > 0 ? 'long' : 'short';
   }
 
-  // Get categorized trades with long/short split
+  // Compute trade data for sorting
+  function getTradeDataForSort(trade: OpenTrade) {
+    const executions = tradeExecutions[trade.id] || [];
+    const aggregated = aggregateExecutionsSimple(executions);
+
+    const isStockTrade = trade.strategy_type?.toLowerCase().includes('stock');
+
+    // For stocks, calculate net position (buys - sells)
+    // For options/combos, use min across legs
+    let rawQty = 0;
+    if (isStockTrade && aggregated.length > 0) {
+      rawQty = aggregated.reduce((net, g) => {
+        const isBuy = g.action === 'BUY';
+        return net + (isBuy ? g.totalQuantity : -g.totalQuantity);
+      }, 0);
+      rawQty = Math.abs(rawQty);
+    } else if (aggregated.length > 0) {
+      rawQty = Math.min(...aggregated.map(g => g.totalQuantity));
+    }
+
+    const qty = isStockTrade
+      ? applyQuantitySplitAdjustment(trade.underlying, rawQty, trade.opened_at)
+      : rawQty;
+
+    const expiration = aggregated.length > 0 && aggregated[0].expiration
+      ? new Date(aggregated[0].expiration)
+      : null;
+
+    const dte = expiration
+      ? Math.ceil((expiration.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+      : 9999; // Put no-expiration at end when sorting
+
+    const netValue = aggregated.reduce((sum, g) => sum + g.totalValue, 0);
+    const totalComm = aggregated.reduce((sum, g) => sum + g.totalCommission, 0);
+
+    return { qty, dte, netValue, totalComm };
+  }
+
+  // Simple aggregation for sorting (without full display logic)
+  function aggregateExecutionsSimple(executions: TradeExecution[]) {
+    const displayExecutions = executions.filter((exec) => {
+      const qty = typeof exec.quantity === 'number' ? exec.quantity : parseFloat(String(exec.quantity));
+      return qty >= 1;
+    });
+
+    const actionGroups: Record<string, TradeExecution[]> = {};
+    displayExecutions.forEach((exec) => {
+      const expDate = exec.expiration ? new Date(exec.expiration).toISOString().split('T')[0] : 'no-exp';
+      const action = exec.side === 'BOT' ? 'BUY' : 'SELL';
+      const key = `${exec.strike}_${exec.option_type}_${expDate}_${action}`;
+      if (!actionGroups[key]) actionGroups[key] = [];
+      actionGroups[key].push(exec);
+    });
+
+    return Object.entries(actionGroups).map(([, execs]) => {
+      const isBuy = execs[0].side === 'BOT';
+      const action = isBuy ? 'BUY' : 'SELL';
+      const totalQty = execs.reduce((sum, e) => sum + e.quantity, 0);
+      const totalValue = isBuy
+        ? execs.reduce((sum, e) => sum + Math.abs(parseFloat(e.net_amount)), 0)
+        : execs.reduce((sum, e) => sum + (-Math.abs(parseFloat(e.net_amount))), 0);
+      const totalCommission = execs.reduce((sum, e) => sum + parseFloat(e.commission), 0);
+      return {
+        action,
+        expiration: execs[0].expiration,
+        totalQuantity: totalQty,
+        totalValue,
+        totalCommission,
+      };
+    });
+  }
+
+  // Handle sort column click
+  function handleSort(column: SortColumn) {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  }
+
+  // Filter trades based on current filters
+  function filterTrades(tradeList: OpenTrade[]): OpenTrade[] {
+    return tradeList.filter(trade => {
+      const tickerMatch = !filterTicker ||
+        trade.underlying.toLowerCase().includes(filterTicker.toLowerCase());
+      const strategyMatch = !filterStrategy ||
+        trade.strategy_type.toLowerCase().includes(filterStrategy.toLowerCase());
+      return tickerMatch && strategyMatch;
+    });
+  }
+
+  // Sort trades based on current sort settings
+  function sortTrades(tradeList: OpenTrade[]): OpenTrade[] {
+    if (!sortColumn) return tradeList;
+
+    return [...tradeList].sort((a, b) => {
+      let aVal: number | string = 0;
+      let bVal: number | string = 0;
+
+      switch (sortColumn) {
+        case 'date':
+          aVal = new Date(a.opened_at).getTime();
+          bVal = new Date(b.opened_at).getTime();
+          break;
+        case 'ticker':
+          aVal = a.underlying.toLowerCase();
+          bVal = b.underlying.toLowerCase();
+          break;
+        case 'strategy':
+          aVal = a.strategy_type.toLowerCase();
+          bVal = b.strategy_type.toLowerCase();
+          break;
+        case 'qty':
+          aVal = getTradeDataForSort(a).qty;
+          bVal = getTradeDataForSort(b).qty;
+          break;
+        case 'dte':
+          aVal = getTradeDataForSort(a).dte;
+          bVal = getTradeDataForSort(b).dte;
+          break;
+        case 'value':
+          aVal = getTradeDataForSort(a).netValue;
+          bVal = getTradeDataForSort(b).netValue;
+          break;
+        case 'commission':
+          aVal = getTradeDataForSort(a).totalComm;
+          bVal = getTradeDataForSort(b).totalComm;
+          break;
+      }
+
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return sortDirection === 'asc'
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+
+      return sortDirection === 'asc'
+        ? (aVal as number) - (bVal as number)
+        : (bVal as number) - (aVal as number);
+    });
+  }
+
+  // Get unique strategies for filter dropdown
+  const uniqueStrategies = [...new Set(trades.map(t => t.strategy_type))].sort();
+
+  // Sortable header component
+  function SortableHeader({
+    column,
+    label,
+    align = 'left'
+  }: {
+    column: SortColumn;
+    label: string;
+    align?: 'left' | 'right';
+  }) {
+    const isActive = sortColumn === column;
+    const alignClass = align === 'right' ? 'text-right justify-end' : 'text-left';
+
+    return (
+      <th
+        className={`px-4 py-2 ${alignClass} text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors select-none`}
+        onClick={() => handleSort(column)}
+      >
+        <div className={`flex items-center gap-1 ${align === 'right' ? 'justify-end' : ''}`}>
+          <span>{label}</span>
+          {isActive ? (
+            sortDirection === 'asc' ? (
+              <ArrowUp className="h-3 w-3 text-blue-500" />
+            ) : (
+              <ArrowDown className="h-3 w-3 text-blue-500" />
+            )
+          ) : (
+            <ArrowUpDown className="h-3 w-3 text-gray-400 opacity-0 group-hover:opacity-100" />
+          )}
+        </div>
+      </th>
+    );
+  }
+
+  // Get filtered trades first
+  const filteredTrades = filterTrades(trades);
+
+  // Get categorized trades with long/short split (using filtered trades)
   const categorizedTrades = {
     stocks: {
-      long: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'stocks' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
-      short: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'stocks' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
+      long: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'stocks' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
+      short: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'stocks' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
     },
     options: {
-      long: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'options' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
-      short: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'options' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
+      long: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'options' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
+      short: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'options' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
     },
     combos: {
-      long: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'combos' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
-      short: trades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'combos' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
+      long: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'combos' && getPositionDirection(t, tradeExecutions[t.id]) === 'long'),
+      short: filteredTrades.filter(t => categorizePosition(t, tradeExecutions[t.id]) === 'combos' && getPositionDirection(t, tradeExecutions[t.id]) === 'short'),
     },
   };
 
@@ -438,22 +630,22 @@ export default function PositionsPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-700">
-                <tr>
+                <tr className="group">
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Date</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Ticker</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Qty</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strategy</th>
+                  <SortableHeader column="date" label="Date" />
+                  <SortableHeader column="ticker" label="Ticker" />
+                  <SortableHeader column="qty" label="Qty" align="right" />
+                  <SortableHeader column="strategy" label="Strategy" />
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strike</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Expiration</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">DTE</th>
+                  <SortableHeader column="dte" label="DTE" align="right" />
                   <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Price</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Value</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Commission</th>
+                  <SortableHeader column="value" label="Value" align="right" />
+                  <SortableHeader column="commission" label="Commission" align="right" />
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {positions.map((trade) => {
+                {sortTrades(positions).map((trade) => {
                   const executions = tradeExecutions[trade.id] || [];
                   const aggregated = aggregateExecutions(executions);
 
@@ -471,12 +663,22 @@ export default function PositionsPage() {
                     ? Math.ceil((expiration.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
                     : null;
 
-                  const rawQty = aggregated.length > 0
-                    ? Math.min(...aggregated.map(g => g.totalQuantity))
-                    : 0;
-
                   // Stock trades don't have a 100x multiplier
                   const isStockTrade = trade.strategy_type?.toLowerCase().includes('stock');
+
+                  // For stocks, calculate net position (buys - sells)
+                  // For options/combos, use min across legs (for spread size)
+                  let rawQty = 0;
+                  if (isStockTrade && aggregated.length > 0) {
+                    // Net position for stocks: sum of buys minus sum of sells
+                    rawQty = aggregated.reduce((net, g) => {
+                      const isBuy = g.action.includes('BTO') || g.action.includes('BTC') || g.action === 'BUY';
+                      return net + (isBuy ? g.totalQuantity : -g.totalQuantity);
+                    }, 0);
+                    rawQty = Math.abs(rawQty); // Show absolute value
+                  } else if (aggregated.length > 0) {
+                    rawQty = Math.min(...aggregated.map(g => g.totalQuantity));
+                  }
                   const priceMultiplier = isStockTrade ? 1 : 100;
 
                   // Apply split adjustments for stock trades
@@ -813,6 +1015,66 @@ export default function PositionsPage() {
                   <span className="text-red-600 dark:text-red-400">{categorizedTrades.combos.short.length}S</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter Bar */}
+        <div className="rounded-lg bg-white dark:bg-gray-800 p-4 shadow transition-colors">
+          <div className="flex flex-wrap items-center gap-4">
+            {/* Ticker Search */}
+            <div className="relative flex-1 min-w-[200px] max-w-[300px]">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search ticker..."
+                value={filterTicker}
+                onChange={(e) => setFilterTicker(e.target.value)}
+                className="w-full pl-9 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              />
+              {filterTicker && (
+                <button
+                  onClick={() => setFilterTicker('')}
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Strategy Dropdown */}
+            <div className="relative min-w-[180px]">
+              <select
+                value={filterStrategy}
+                onChange={(e) => setFilterStrategy(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm appearance-none cursor-pointer"
+              >
+                <option value="">All Strategies</option>
+                {uniqueStrategies.map((strategy) => (
+                  <option key={strategy} value={strategy}>
+                    {strategy}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+            </div>
+
+            {/* Clear Filters */}
+            {(filterTicker || filterStrategy) && (
+              <button
+                onClick={() => {
+                  setFilterTicker('');
+                  setFilterStrategy('');
+                }}
+                className="px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+
+            {/* Results count */}
+            <div className="ml-auto text-sm text-gray-500 dark:text-gray-400">
+              {filteredTrades.length} of {trades.length} positions
             </div>
           </div>
         </div>

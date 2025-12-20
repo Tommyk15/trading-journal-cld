@@ -128,6 +128,8 @@ class TradeProcessResponse(BaseModel):
     trades_created: int = Field(..., description="Number of trades created")
     trades_updated: int = Field(..., description="Number of trades updated")
     message: str = Field(..., description="Result message")
+    greeks_fetched: int | None = Field(None, description="Number of trades with Greeks fetched")
+    greeks_failed: int | None = Field(None, description="Number of trades where Greeks fetch failed")
 
 
 class ManualTradeCreateRequest(BaseModel):

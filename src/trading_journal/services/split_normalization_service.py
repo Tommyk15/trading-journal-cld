@@ -84,6 +84,12 @@ class SplitNormalizationService:
             executions = list(result.scalars().all())
 
             for exec in executions:
+                # Skip currency/forex trades (huge quantities, tiny prices)
+                if exec.quantity and exec.quantity > 1000000:
+                    continue  # Likely a currency trade, not a stock
+                if exec.price and exec.price < Decimal("0.01"):
+                    continue  # Likely a currency trade
+
                 needs_update = False
                 new_strike = exec.strike
                 new_quantity = exec.quantity

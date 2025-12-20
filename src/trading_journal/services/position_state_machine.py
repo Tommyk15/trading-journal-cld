@@ -8,7 +8,7 @@ This module implements a state-based approach to grouping executions into trades
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 
@@ -204,10 +204,14 @@ class PositionStateMachine:
         # Add any remaining open trades
         for trade in self.open_trades.values():
             if trade.executions:
-                # Check if the legs are flat
-                trade_legs = frozenset(trade.opening_position.keys())
+                # Check if the legs are flat FOR THIS SPECIFIC TRADE
+                # Use per-trade remaining quantity to handle multiple trades with same leg
+                trade_legs = set(trade.opening_position.keys())
+                for exec in trade.executions:
+                    trade_legs.add(self.get_leg_key(exec))
+
                 all_flat = all(
-                    self.position.get(leg, LegPosition(leg)).quantity == 0
+                    self._calculate_trade_remaining_qty(trade, leg) == 0
                     for leg in trade_legs
                 )
                 trade.status = "CLOSED" if all_flat else "OPEN"
@@ -215,8 +219,19 @@ class PositionStateMachine:
 
         return self.completed_trades
 
+    # Maximum expiration difference (in days) for executions to be in the same trade
+    # Executions with expirations > 30 days apart are likely different strategies
+    EXPIRATION_CLUSTER_DAYS = 30
+
     def _group_simultaneous(self, executions: list[Execution]) -> list[list[Execution]]:
-        """Group near-simultaneous executions.
+        """Group near-simultaneous executions, then split by expiration cluster.
+
+        Executions are first grouped by time (within SIMULTANEOUS_WINDOW), then
+        each time-based group is split by expiration. Options with expirations
+        more than EXPIRATION_CLUSTER_DAYS apart are treated as separate trades.
+
+        This prevents LEAPs from being grouped with near-term spreads even if
+        they're executed at the same time.
 
         Args:
             executions: Sorted list of executions
@@ -227,7 +242,8 @@ class PositionStateMachine:
         if not executions:
             return []
 
-        groups = []
+        # First pass: group by time
+        time_groups = []
         current_group = []
         group_start_time = None
 
@@ -240,12 +256,67 @@ class PositionStateMachine:
                 if time_diff <= self.SIMULTANEOUS_WINDOW:
                     current_group.append(exec)
                 else:
-                    groups.append(current_group)
+                    time_groups.append(current_group)
                     current_group = [exec]
                     group_start_time = exec.execution_time
 
         if current_group:
-            groups.append(current_group)
+            time_groups.append(current_group)
+
+        # Second pass: split each time group by expiration cluster
+        final_groups = []
+        for time_group in time_groups:
+            expiration_subgroups = self._split_by_expiration(time_group)
+            final_groups.extend(expiration_subgroups)
+
+        return final_groups
+
+    def _split_by_expiration(self, executions: list[Execution]) -> list[list[Execution]]:
+        """Split executions into groups based on expiration clusters.
+
+        Options with expirations more than EXPIRATION_CLUSTER_DAYS apart are
+        placed in separate groups. Stock executions (no expiration) are grouped
+        separately.
+
+        Args:
+            executions: List of executions to split
+
+        Returns:
+            List of execution groups, each with similar expirations
+        """
+        if not executions:
+            return []
+
+        # Separate stock executions from options
+        stock_execs = [e for e in executions if e.security_type != "OPT" or not e.expiration]
+        option_execs = [e for e in executions if e.security_type == "OPT" and e.expiration]
+
+        groups = []
+
+        # Stock executions form their own group if present
+        if stock_execs:
+            groups.append(stock_execs)
+
+        # Cluster options by expiration
+        if option_execs:
+            # Sort by expiration
+            sorted_options = sorted(option_execs, key=lambda e: e.expiration)
+
+            current_cluster = [sorted_options[0]]
+            cluster_anchor_exp = sorted_options[0].expiration
+
+            for exec in sorted_options[1:]:
+                days_diff = (exec.expiration - cluster_anchor_exp).days
+                if abs(days_diff) <= self.EXPIRATION_CLUSTER_DAYS:
+                    current_cluster.append(exec)
+                else:
+                    # Start new cluster
+                    groups.append(current_cluster)
+                    current_cluster = [exec]
+                    cluster_anchor_exp = exec.expiration
+
+            if current_cluster:
+                groups.append(current_cluster)
 
         return groups
 
@@ -296,22 +367,87 @@ class PositionStateMachine:
         opening_legs = frozenset(self.get_leg_key(e) for e in opening_execs)
 
         # Process closing executions first - assign to existing trades
+        # Orphaned closes (no matching trade) are treated as openings
+        # IMPORTANT: Must check remaining quantity to avoid over-closing a trade
+        orphaned_closes = []
         if closing_execs:
             closing_deltas = self._calculate_deltas(closing_execs)
 
             for exec in closing_execs:
-                leg = frozenset([self.get_leg_key(exec)])
-                matching_trade = self._find_matching_trade(leg)
+                leg_key = self.get_leg_key(exec)
+                leg = frozenset([leg_key])
+                exec_qty = int(exec.quantity) if exec.side == "BOT" else -int(exec.quantity)
 
-                if matching_trade is not None:
-                    trade_key, trade = matching_trade
-                    trade.add_execution(exec)
+                # Find a trade that can accept this closing execution
+                # without over-closing (crossing zero)
+                assigned = False
+                for trade_key, trade in sorted(
+                    self.open_trades.items(),
+                    key=lambda x: x[1].opened_at or datetime.min
+                ):
+                    remaining = self._calculate_trade_remaining_qty(trade, leg_key)
+                    if remaining == 0:
+                        continue
 
-            # Apply closing deltas to position
-            self._apply_deltas(closing_deltas, closing_execs)
+                    # Check if this execution would over-close the trade
+                    # remaining > 0 (long) + exec_qty < 0 (sell to close) = closing long
+                    # remaining < 0 (short) + exec_qty > 0 (buy to close) = closing short
+                    would_over_close = False
+                    if remaining > 0 and exec_qty < 0:
+                        # Closing a long position - can close up to 'remaining' qty
+                        if abs(exec_qty) > remaining:
+                            would_over_close = True
+                    elif remaining < 0 and exec_qty > 0:
+                        # Closing a short position - can close up to abs(remaining) qty
+                        if exec_qty > abs(remaining):
+                            would_over_close = True
 
-            # Check if any trades are now fully closed
-            # Need to check all active legs of each trade
+                    if not would_over_close:
+                        trade.add_execution(exec)
+                        assigned = True
+                        break
+
+                if not assigned:
+                    # No trade can accept this execution without over-closing
+                    # Fallback: assign to the trade with the MOST remaining quantity
+                    # (minimizes over-close impact on any single trade)
+                    best_trade = None
+                    best_remaining = 0
+                    for trade_key, trade in self.open_trades.items():
+                        remaining = self._calculate_trade_remaining_qty(trade, leg_key)
+                        # Only consider trades with matching direction
+                        # (short position for buy-to-close, long for sell-to-close)
+                        if remaining != 0:
+                            if (remaining < 0 and exec_qty > 0) or (remaining > 0 and exec_qty < 0):
+                                if abs(remaining) > abs(best_remaining):
+                                    best_remaining = remaining
+                                    best_trade = trade
+
+                    if best_trade is not None:
+                        best_trade.add_execution(exec)
+                        assigned = True
+                    else:
+                        # No matching trade at all - treat as orphaned close
+                        orphaned_closes.append(exec)
+
+            # Apply closing deltas to position (only for matched closes)
+            matched_closes = [e for e in closing_execs if e not in orphaned_closes]
+            if matched_closes:
+                matched_deltas = self._calculate_deltas(matched_closes)
+                self._apply_deltas(matched_deltas, matched_closes)
+
+        # Add orphaned closes to opening executions
+        if orphaned_closes:
+            opening_execs.extend(orphaned_closes)
+            # Recalculate opening_legs to include orphaned closes
+            opening_legs = frozenset(self.get_leg_key(e) for e in opening_execs)
+
+        # Check if any trades are now fully closed (after processing matched closes)
+        # Use per-trade remaining quantity (not global position) to properly
+        # handle multiple trades with the same leg
+        matched_closes = [e for e in closing_execs if e not in orphaned_closes] if closing_execs else []
+        if matched_closes:
+            # Only check for closed trades if we actually processed some closes
             trades_to_close = []
             for trade_key, trade in list(self.open_trades.items()):
                 # Get ALL legs this trade has touched (from opening_position + any added legs)
@@ -320,9 +456,9 @@ class PositionStateMachine:
                 for exec in trade.executions:
                     trade_legs.add(self.get_leg_key(exec))
 
-                # Check if all legs are flat
+                # Check if all legs are flat FOR THIS SPECIFIC TRADE
                 all_flat = all(
-                    self.position.get(leg, LegPosition(leg)).quantity == 0
+                    self._calculate_trade_remaining_qty(trade, leg) == 0
                     for leg in trade_legs
                 )
 
@@ -337,72 +473,114 @@ class PositionStateMachine:
                 self.last_trade_close_time = exec_time
 
         # Process opening executions - create new trade(s) or add to existing
+        # Key insight: If opening executions form a SPREAD (multiple different strikes
+        # at the same timestamp), they should be kept together as a NEW trade,
+        # not split across existing trades.
         if opening_execs:
-            opening_deltas = self._calculate_deltas(opening_execs)
+            opening_leg_keys = set(self.get_leg_key(e) for e in opening_execs)
+            opening_legs_frozen = frozenset(opening_leg_keys)
 
-            # Check if there's an existing open trade with overlapping legs
+            # Check for assignment: option closing at $0 with stock opening
+            is_assignment_from_option = self._detect_assignment(closing_execs, opening_execs)
+
+            # Check if there's an existing trade with the EXACT same legs (adding to position)
             existing_trade_key = None
             for trade_key in self.open_trades:
-                if opening_legs & trade_key:  # Any overlap
+                # For spread additions, check if ALL legs match (same structure)
+                if opening_legs_frozen == trade_key:
                     existing_trade_key = trade_key
                     break
+                # Also check if legs are a subset (adding to same expiration spread)
+                if opening_legs_frozen.issubset(trade_key) or trade_key.issubset(opening_legs_frozen):
+                    # Verify expiration compatibility
+                    existing_exp = self._get_expirations_from_legs(trade_key)
+                    new_exp = self._get_expirations_from_legs(opening_legs_frozen)
+                    if existing_exp and new_exp and self._expirations_are_compatible(existing_exp, new_exp):
+                        existing_trade_key = trade_key
+                        break
 
-            if existing_trade_key is not None:
-                # Add to existing trade (continuation of same position)
+            if existing_trade_key is not None and not is_assignment_from_option:
+                # Add to existing trade with same leg structure
                 existing_trade = self.open_trades[existing_trade_key]
                 for exec in opening_execs:
                     existing_trade.add_execution(exec)
 
-                # Update the trade key to include new legs if any
-                new_key = existing_trade_key | opening_legs
+                # Update trade key to include any new legs
+                new_key = existing_trade_key | opening_legs_frozen
                 if new_key != existing_trade_key:
                     self.open_trades[new_key] = self.open_trades.pop(existing_trade_key)
 
-                # Apply opening deltas to position
-                self._apply_deltas(opening_deltas, opening_execs)
+                # Apply deltas
+                deltas = self._calculate_deltas(opening_execs)
+                self._apply_deltas(deltas, opening_execs)
             else:
-                # No existing trade - create new one
-                # Check if this is a roll or assignment (opening new legs right after closing)
-                is_roll = False
-                is_assignment = False
+                # Check if this is a new spread structure
+                is_new_spread = self._is_new_spread_structure(opening_execs, opening_leg_keys)
 
-                if bool(closing_execs) and closing_legs.isdisjoint(opening_legs):
-                    # Determine if this is a roll (option -> option) or assignment (option -> stock)
-                    closing_has_options = any(leg != "STK" for leg in closing_legs)
-                    opening_has_stock = "STK" in opening_legs
-                    opening_has_options = any(leg != "STK" for leg in opening_legs)
+                if is_new_spread or is_assignment_from_option:
+                    # Create ALL opening executions as a NEW trade together
+                    # Don't split them across existing trades
+                    self._create_new_trade(
+                        opening_execs,
+                        closing_execs,
+                        closing_legs,
+                        force_assignment=is_assignment_from_option
+                    )
+                else:
+                    # Single leg additions - use existing logic to match to existing trades
+                    execs_by_target: dict[frozenset[str] | None, list[Execution]] = {}
 
-                    if closing_has_options and opening_has_stock and not opening_has_options:
-                        # Option closed, stock opened = Assignment (put assigned or call exercised)
-                        is_assignment = True
-                    elif closing_has_options and opening_has_options:
-                        # Option closed, option opened = Roll
-                        is_roll = True
+                    for exec in opening_execs:
+                        exec_leg = frozenset([self.get_leg_key(exec)])
+                        target_trade_key = None
 
-                new_trade = TradeGroup(underlying=self.underlying)
-                if is_roll:
-                    new_trade.roll_type = "ROLL"
-                if is_assignment:
-                    new_trade.is_assignment = True
+                        # Find existing trade with this leg
+                        for trade_key in self.open_trades:
+                            if exec_leg & trade_key:
+                                # Check expiration compatibility
+                                existing_expirations = self._get_expirations_from_legs(trade_key)
+                                new_expirations = self._get_expirations_from_legs(exec_leg)
+                                if existing_expirations and new_expirations:
+                                    if not self._expirations_are_compatible(existing_expirations, new_expirations):
+                                        continue
+                                target_trade_key = trade_key
+                                break
 
-                for exec in opening_execs:
-                    new_trade.add_execution(exec)
+                        if target_trade_key not in execs_by_target:
+                            execs_by_target[target_trade_key] = []
+                        execs_by_target[target_trade_key].append(exec)
 
-                # Record opening position
-                for leg, delta in opening_deltas.items():
-                    new_trade.opening_position[leg] = delta
+                    # Process each target group
+                    for target_key, execs in execs_by_target.items():
+                        if target_key is not None:
+                            # Add to existing trade
+                            existing_trade = self.open_trades[target_key]
+                            for exec in execs:
+                                existing_trade.add_execution(exec)
 
-                # Apply opening deltas to position
-                self._apply_deltas(opening_deltas, opening_execs)
+                            # Update trade key to include any new legs
+                            new_legs = frozenset(self.get_leg_key(e) for e in execs)
+                            new_key = target_key | new_legs
+                            if new_key != target_key:
+                                self.open_trades[new_key] = self.open_trades.pop(target_key)
+                                target_key = new_key
 
-                # Store as open trade
-                self.open_trades[opening_legs] = new_trade
+                            # Apply deltas
+                            deltas = self._calculate_deltas(execs)
+                            self._apply_deltas(deltas, execs)
+                        else:
+                            # Create new trade for these executions
+                            self._create_new_trade(execs, closing_execs, closing_legs)
 
     def _find_matching_trade(self, group_legs: frozenset[str]) -> tuple[frozenset[str], TradeGroup] | None:
-        """Find an open trade that matches the given legs.
+        """Find an open trade that matches the given legs (FIFO order).
 
-        A trade matches if the group legs overlap with the trade's legs.
+        A trade matches if the group legs overlap with the trade's legs AND
+        the trade still has remaining open quantity for at least one of those legs.
         We need to check both the original trade_key AND any legs added via rolls.
+
+        Returns the OLDEST matching trade (FIFO) to properly distribute closings
+        across multiple trades with the same leg.
 
         Args:
             group_legs: Set of leg keys in the execution group
@@ -410,6 +588,8 @@ class PositionStateMachine:
         Returns:
             Tuple of (trade_key, trade) or None if no match
         """
+        matching_trades = []
+
         for trade_key, trade in self.open_trades.items():
             # Get all legs this trade has touched
             all_trade_legs = set(trade_key)
@@ -418,9 +598,73 @@ class PositionStateMachine:
                 all_trade_legs.add(self.get_leg_key(exec))
 
             # Check if group legs overlap with any of the trade's legs
-            if group_legs & all_trade_legs:
-                return (trade_key, trade)
-        return None
+            overlapping_legs = group_legs & all_trade_legs
+            if overlapping_legs:
+                # Check if trade has remaining open quantity for any overlapping leg
+                has_open_qty = False
+                for leg in overlapping_legs:
+                    remaining = self._calculate_trade_remaining_qty(trade, leg)
+                    if remaining != 0:
+                        has_open_qty = True
+                        break
+
+                if has_open_qty:
+                    matching_trades.append((trade_key, trade))
+
+        if not matching_trades:
+            return None
+
+        # Sort by opened_at (FIFO) - oldest trade first
+        matching_trades.sort(key=lambda x: x[1].opened_at or datetime.min)
+        return matching_trades[0]
+
+    def _calculate_trade_remaining_qty(self, trade: TradeGroup, leg: str) -> int:
+        """Calculate remaining open quantity for a specific leg in a trade.
+
+        This is used to determine which trade should receive closing executions
+        when multiple trades have the same leg open.
+
+        Calculates position purely from executions to avoid double-counting issues
+        with opening_position. Each execution's contribution:
+        - Opening ('O'): adds to position (buy = +, sell = -)
+        - Closing ('C'): reduces position toward zero
+
+        Args:
+            trade: The trade to check
+            leg: The leg key to calculate quantity for
+
+        Returns:
+            Remaining open quantity (positive for long, negative for short, 0 if closed)
+        """
+        qty = 0
+
+        # Calculate from all executions in this trade
+        for exec in trade.executions:
+            if self.get_leg_key(exec) == leg:
+                exec_delta = int(exec.quantity) if exec.side == "BOT" else -int(exec.quantity)
+
+                if exec.open_close_indicator == 'O':
+                    # Opening: add to position
+                    qty += exec_delta
+                elif exec.open_close_indicator == 'C':
+                    # Closing: reduce position toward zero
+                    if qty > 0:
+                        qty = max(0, qty + exec_delta)
+                    elif qty < 0:
+                        qty = min(0, qty + exec_delta)
+                else:
+                    # No indicator: infer from position direction
+                    # If delta moves position toward zero, treat as closing
+                    if (qty > 0 and exec_delta < 0) or (qty < 0 and exec_delta > 0):
+                        if qty > 0:
+                            qty = max(0, qty + exec_delta)
+                        else:
+                            qty = min(0, qty + exec_delta)
+                    else:
+                        # Adding to position
+                        qty += exec_delta
+
+        return qty
 
     def _trade_is_closed(self, trade_key: frozenset[str]) -> bool:
         """Check if all legs of a trade are now flat (closed).
@@ -435,6 +679,211 @@ class PositionStateMachine:
             self.position.get(leg, LegPosition(leg)).quantity == 0
             for leg in trade_key
         )
+
+    def _get_expirations_from_legs(self, legs: frozenset[str]) -> set[date]:
+        """Extract expiration dates from leg keys.
+
+        Leg keys have format: {expiry}_{strike}_{option_type} for options,
+        or "STK" for stocks.
+
+        Args:
+            legs: Frozenset of leg keys
+
+        Returns:
+            Set of expiration dates (empty for stock-only legs)
+        """
+        expirations: set[date] = set()
+        for leg in legs:
+            if leg == "STK":
+                continue
+            parts = leg.split("_")
+            if len(parts) >= 1 and parts[0]:
+                try:
+                    # Parse YYYYMMDD format
+                    exp_str = parts[0]
+                    exp_date = date(
+                        int(exp_str[:4]),
+                        int(exp_str[4:6]),
+                        int(exp_str[6:8])
+                    )
+                    expirations.add(exp_date)
+                except (ValueError, IndexError):
+                    pass
+        return expirations
+
+    def _expirations_are_compatible(
+        self,
+        expirations1: set[date],
+        expirations2: set[date]
+    ) -> bool:
+        """Check if two sets of expirations are close enough to be the same trade.
+
+        Args:
+            expirations1: First set of expiration dates
+            expirations2: Second set of expiration dates
+
+        Returns:
+            True if all expirations are within EXPIRATION_CLUSTER_DAYS of each other
+        """
+        if not expirations1 or not expirations2:
+            return True  # If either is empty, allow merge
+
+        # Check if any expiration from set2 is too far from all expirations in set1
+        for exp2 in expirations2:
+            min_diff = min(abs((exp2 - exp1).days) for exp1 in expirations1)
+            if min_diff > self.EXPIRATION_CLUSTER_DAYS:
+                return False
+        return True
+
+    def _is_new_spread_structure(
+        self,
+        opening_execs: list[Execution],
+        opening_leg_keys: set[str]
+    ) -> bool:
+        """Check if opening executions form a new spread structure.
+
+        A spread structure is:
+        - 2+ different option legs (different strikes or types)
+        - Same expiration (approximately)
+        - Has both long and short sides (vertical spread)
+
+        This prevents spread legs from being split across different trades.
+
+        Args:
+            opening_execs: List of opening executions
+            opening_leg_keys: Set of leg keys
+
+        Returns:
+            True if this is a new spread that should stay together
+        """
+        # Need at least 2 different option legs
+        option_legs = [k for k in opening_leg_keys if k != "STK"]
+        if len(option_legs) < 2:
+            return False
+
+        # Check if we have both buys and sells (spread structure)
+        has_buys = any(e.side == "BOT" and e.security_type == "OPT" for e in opening_execs)
+        has_sells = any(e.side == "SLD" and e.security_type == "OPT" for e in opening_execs)
+
+        if not (has_buys and has_sells):
+            return False
+
+        # Extract strikes from option legs
+        strikes = set()
+        for leg in option_legs:
+            parts = leg.split("_")
+            if len(parts) >= 2:
+                try:
+                    strikes.add(float(parts[1]))
+                except (ValueError, IndexError):
+                    pass
+
+        # Multiple different strikes = spread
+        return len(strikes) >= 2
+
+    def _detect_assignment(
+        self,
+        closing_execs: list[Execution],
+        opening_execs: list[Execution]
+    ) -> bool:
+        """Detect if this is an option assignment (exercise).
+
+        An assignment is detected when:
+        - Option is closing (being exercised/assigned)
+        - Option price is $0 or very low (intrinsic value only)
+        - Stock is opening at the same time
+        - Stock quantity = option quantity * 100
+
+        Args:
+            closing_execs: Executions closing positions
+            opening_execs: Executions opening positions
+
+        Returns:
+            True if this appears to be an assignment
+        """
+        if not closing_execs or not opening_execs:
+            return False
+
+        # Find option closes at $0 (or very low price indicating exercise)
+        option_closes = [
+            e for e in closing_execs
+            if e.security_type == "OPT" and e.price <= 0.05
+        ]
+
+        if not option_closes:
+            return False
+
+        # Find stock opens
+        stock_opens = [
+            e for e in opening_execs
+            if e.security_type == "STK"
+        ]
+
+        if not stock_opens:
+            return False
+
+        # Check quantity relationship: stock qty should be ~100x option qty
+        total_option_qty = sum(e.quantity for e in option_closes)
+        total_stock_qty = sum(e.quantity for e in stock_opens)
+
+        expected_stock_qty = total_option_qty * 100
+
+        # Allow some tolerance for partial fills
+        if abs(total_stock_qty - expected_stock_qty) <= expected_stock_qty * 0.1:
+            return True
+
+        return False
+
+    def _create_new_trade(
+        self,
+        opening_execs: list[Execution],
+        closing_execs: list[Execution],
+        closing_legs: frozenset[str],
+        force_assignment: bool = False
+    ) -> None:
+        """Create a new trade from opening executions.
+
+        Args:
+            opening_execs: Executions that open the new trade
+            closing_execs: Any closing executions in the same group (for roll detection)
+            closing_legs: Leg keys of closing executions
+            force_assignment: Force this trade to be marked as assignment
+        """
+        opening_deltas = self._calculate_deltas(opening_execs)
+        opening_legs = frozenset(self.get_leg_key(e) for e in opening_execs)
+
+        # Check if this is a roll or assignment
+        is_roll = False
+        is_assignment = force_assignment
+
+        if not is_assignment and bool(closing_execs) and closing_legs.isdisjoint(opening_legs):
+            closing_has_options = any(leg != "STK" for leg in closing_legs)
+            opening_has_stock = "STK" in opening_legs
+            opening_has_options = any(leg != "STK" for leg in opening_legs)
+
+            if closing_has_options and opening_has_stock and not opening_has_options:
+                is_assignment = True
+            elif closing_has_options and opening_has_options:
+                is_roll = True
+
+        new_trade = TradeGroup(underlying=self.underlying)
+        if is_roll:
+            new_trade.roll_type = "ROLL"
+        if is_assignment:
+            new_trade.is_assignment = True
+
+        for exec in opening_execs:
+            new_trade.add_execution(exec)
+
+        # Record opening position
+        for leg, delta in opening_deltas.items():
+            new_trade.opening_position[leg] = delta
+
+        # Apply opening deltas to position
+        self._apply_deltas(opening_deltas, opening_execs)
+
+        # Store as open trade
+        self.open_trades[opening_legs] = new_trade
 
     def _process_execution_group(self, group: list[Execution]) -> None:
         """Process a group of simultaneous executions (DEPRECATED - use v2).

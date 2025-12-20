@@ -1,12 +1,17 @@
 """TradeLegGreeks model - Per-leg Greeks data for trades."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading_journal.core.database import Base
+
+
+def utcnow() -> datetime:
+    """Return current UTC time as a timezone-aware datetime."""
+    return datetime.now(UTC)
 
 
 class TradeLegGreeks(Base):
@@ -60,8 +65,8 @@ class TradeLegGreeks(Base):
     data_source: Mapped[str | None] = mapped_column(String(20))  # IBKR, POLYGON
 
     # Metadata
-    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     def __repr__(self) -> str:
         """String representation."""
