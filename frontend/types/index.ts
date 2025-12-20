@@ -1,5 +1,12 @@
 // Core trading types matching backend API schemas
 
+export interface Tag {
+  id: number;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
 export interface Execution {
   id: number;
   exec_id: string;
@@ -28,7 +35,9 @@ export interface Trade {
   id: number;
   symbol: string;
   underlying_symbol: string;
+  underlying: string;
   strategy: string;
+  strategy_type: string;
   side: string;
   quantity: number;
   avg_open_price: number;
@@ -41,6 +50,32 @@ export interface Trade {
   executions: Execution[];
   created_at: string;
   updated_at: string;
+
+  // Trade Open Snapshot (Greeks & IV at entry)
+  underlying_price_open?: number;
+  iv_open?: number;
+  iv_percentile_52w_open?: number;
+  iv_rank_52w_open?: number;
+  delta_open?: number;
+  gamma_open?: number;
+  theta_open?: number;
+  vega_open?: number;
+  pop_open?: number;
+  max_profit?: number;
+  max_risk?: number;
+
+  // Trade Close Snapshot
+  underlying_price_close?: number;
+  iv_close?: number;
+  delta_close?: number;
+  pnl_percent?: number;
+
+  // Greeks metadata
+  greeks_source?: string;
+  greeks_pending?: boolean;
+
+  // Tags
+  tag_list?: Tag[];
 }
 
 export interface Position {
@@ -343,4 +378,78 @@ export interface MetricsTimeSeriesResponse {
   period: TimePeriod;
   start_date: string | null;
   end_date: string | null;
+}
+
+// Trade Analytics types
+export interface TradeAnalytics {
+  trade_id: number;
+  underlying: string;
+  strategy_type: string;
+  status: string;
+  // Net Greeks
+  net_delta: number | null;
+  net_gamma: number | null;
+  net_theta: number | null;
+  net_vega: number | null;
+  // IV metrics
+  trade_iv: number | null;
+  iv_percentile_52w: number | null;
+  iv_rank_52w: number | null;
+  iv_percentile_custom: number | null;
+  iv_rank_custom: number | null;
+  // Risk analytics
+  pop: number | null;
+  breakevens: number[];
+  max_profit: number | null;
+  max_risk: number | null;
+  risk_reward_ratio: number | null;
+  pnl_percent: number | null;
+  // Collateral
+  collateral_calculated: number | null;
+  collateral_ibkr: number | null;
+  // Time
+  dte: number | null;
+  days_held: number | null;
+  // Metadata
+  greeks_source: string | null;
+  greeks_pending: boolean;
+  underlying_price: number | null;
+}
+
+export interface LegGreeks {
+  leg_index: number;
+  option_type: string | null;
+  strike: number | null;
+  expiration: string | null;
+  quantity: number;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  iv: number | null;
+  underlying_price: number | null;
+  option_price: number | null;
+  bid: number | null;
+  ask: number | null;
+  bid_ask_spread: number | null;
+  open_interest: number | null;
+  volume: number | null;
+  data_source: string | null;
+  captured_at: string | null;
+}
+
+export interface TradeLegsResponse {
+  trade_id: number;
+  snapshot_type: string;
+  legs: LegGreeks[];
+  captured_at: string | null;
+}
+
+export interface FetchGreeksResponse {
+  trade_id: number;
+  success: boolean;
+  legs_fetched: number;
+  source: string | null;
+  message: string;
 }

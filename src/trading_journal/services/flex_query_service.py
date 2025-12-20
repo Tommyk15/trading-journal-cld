@@ -3,7 +3,7 @@
 import csv
 import io
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -223,13 +223,21 @@ class FlexQueryService:
             Execution dictionary or None if parsing fails
         """
         try:
-            # Parse datetime
+            # Parse datetime - try multiple formats and add UTC timezone
             dt_str = row.get("DateTime", "")
             execution_time = None
             if dt_str:
-                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d, %H:%M:%S", "%Y%m%d;%H%M%S"]:
+                # Try multiple datetime formats (with and without seconds)
+                for fmt in [
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d, %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                    "%Y-%m-%d, %H:%M",
+                    "%Y%m%d;%H%M%S",
+                    "%Y%m%d;%H%M",
+                ]:
                     try:
-                        execution_time = datetime.strptime(dt_str, fmt)
+                        execution_time = datetime.strptime(dt_str, fmt).replace(tzinfo=UTC)
                         break
                     except ValueError:
                         continue
@@ -252,11 +260,11 @@ class FlexQueryService:
             except (ValueError, TypeError):
                 trade_id = 0
 
-            # Parse numeric fields
+            # Parse numeric fields (use Decimal for fractional share support)
             try:
-                quantity = abs(int(float(row.get("Quantity", 0) or 0)))
+                quantity = abs(Decimal(str(row.get("Quantity", 0) or 0)))
             except (ValueError, TypeError):
-                quantity = 0
+                quantity = Decimal("0")
 
             try:
                 price = Decimal(str(row.get("TradePrice", 0) or 0))
@@ -304,7 +312,7 @@ class FlexQueryService:
                 if expiry_str:
                     for fmt in ["%Y-%m-%d", "%Y%m%d"]:
                         try:
-                            expiration = datetime.strptime(expiry_str, fmt)
+                            expiration = datetime.strptime(expiry_str, fmt).replace(tzinfo=UTC)
                             break
                         except ValueError:
                             continue
@@ -349,20 +357,28 @@ class FlexQueryService:
             Execution dictionary or None if parsing fails
         """
         try:
-            # Parse datetime
+            # Parse datetime - format is YYYYMMDD;HHMMSS or YYYYMMDD;HHMMSS;TZ
             dt_str = trade.get("dateTime", "")
-            if ";" in dt_str:
-                dt_str = dt_str.split(";")[0]  # Remove timezone part
-
             execution_time = None
             if dt_str:
-                # Try multiple formats
-                for fmt in ["%Y%m%d;%H%M%S", "%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S"]:
-                    try:
-                        execution_time = datetime.strptime(dt_str, fmt)
-                        break
-                    except ValueError:
-                        continue
+                parts = dt_str.split(";")
+                if len(parts) >= 2:
+                    # Has date and time (possibly with timezone suffix to ignore)
+                    dt_clean = f"{parts[0]};{parts[1]}"
+                    for fmt in ["%Y%m%d;%H%M%S", "%Y%m%d;%H%M"]:
+                        try:
+                            execution_time = datetime.strptime(dt_clean, fmt).replace(tzinfo=UTC)
+                            break
+                        except ValueError:
+                            continue
+                elif len(parts) == 1:
+                    # Just date or concatenated format
+                    for fmt in ["%Y%m%d%H%M%S", "%Y%m%d", "%Y-%m-%d %H:%M:%S"]:
+                        try:
+                            execution_time = datetime.strptime(parts[0], fmt).replace(tzinfo=UTC)
+                            break
+                        except ValueError:
+                            continue
 
             # Parse IDs
             try:
@@ -387,7 +403,7 @@ class FlexQueryService:
                 "currency": trade.get("currency", "USD"),
                 "side": "BOT" if trade.get("buySell") == "BUY" else "SLD",
                 "open_close_indicator": trade.get("openCloseIndicator", None),
-                "quantity": abs(int(float(trade.get("quantity", 0)))),
+                "quantity": abs(Decimal(str(trade.get("quantity", 0)))),
                 "price": Decimal(str(trade.get("tradePrice", 0))),
                 "commission": abs(Decimal(str(trade.get("ibCommission", 0)))),
                 "net_amount": Decimal(str(trade.get("netCash", 0))),
@@ -401,7 +417,7 @@ class FlexQueryService:
                 if expiry_str:
                     for fmt in ["%Y%m%d", "%Y-%m-%d"]:
                         try:
-                            expiration = datetime.strptime(expiry_str, fmt)
+                            expiration = datetime.strptime(expiry_str, fmt).replace(tzinfo=UTC)
                             break
                         except ValueError:
                             continue

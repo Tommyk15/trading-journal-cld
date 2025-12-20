@@ -6,6 +6,17 @@ import { api } from '@/lib/api/client';
 import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
 import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box } from 'lucide-react';
 
+// Stock split type for adjustment calculations
+interface StockSplit {
+  id: number;
+  symbol: string;
+  split_date: string;
+  ratio_from: number;
+  ratio_to: number;
+  adjustment_factor: number;
+  price_factor: number;
+}
+
 interface OpenTrade {
   id: number;
   underlying: string;
@@ -22,6 +33,7 @@ interface OpenTrade {
 
 interface TradeExecution {
   id: number;
+  exec_id: string;
   symbol: string;
   underlying: string;
   side: string;
@@ -48,6 +60,51 @@ export default function PositionsPage() {
   const [expandedTrades, setExpandedTrades] = useState<Set<number>>(new Set());
   const [tradeExecutions, setTradeExecutions] = useState<Record<number, TradeExecution[]>>({});
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [stockSplits, setStockSplits] = useState<Record<string, StockSplit[]>>({});
+
+  // Apply split adjustments to quantity based on execution date
+  function applyQuantitySplitAdjustment(symbol: string, quantity: number, executionDate: string): number {
+    const splits = stockSplits[symbol] || [];
+    let adjustedQty = quantity;
+    const execDate = new Date(executionDate);
+
+    for (const split of splits) {
+      const splitDate = new Date(split.split_date);
+      // Only apply splits that occurred AFTER the execution date
+      if (splitDate > execDate) {
+        adjustedQty *= split.adjustment_factor;
+      }
+    }
+
+    return Math.round(adjustedQty * 1000) / 1000; // Round to avoid floating point issues
+  }
+
+  // Apply split adjustments to price based on execution date
+  function applyPriceSplitAdjustment(symbol: string, price: number, executionDate: string): number {
+    const splits = stockSplits[symbol] || [];
+    let adjustedPrice = price;
+    const execDate = new Date(executionDate);
+
+    for (const split of splits) {
+      const splitDate = new Date(split.split_date);
+      // Only apply splits that occurred AFTER the execution date
+      if (splitDate > execDate) {
+        adjustedPrice *= split.price_factor;
+      }
+    }
+
+    return adjustedPrice;
+  }
+
+  async function fetchStockSplits() {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/stock-splits/by-symbol');
+      const data = await response.json();
+      setStockSplits(data);
+    } catch (error) {
+      console.error('Error fetching stock splits:', error);
+    }
+  }
 
   async function fetchOpenTrades() {
     try {
@@ -79,6 +136,7 @@ export default function PositionsPage() {
   }
 
   useEffect(() => {
+    fetchStockSplits();
     fetchOpenTrades();
   }, []);
 
@@ -176,9 +234,16 @@ export default function PositionsPage() {
 
   // Aggregate executions for display
   function aggregateExecutions(executions: TradeExecution[]) {
+    // Filter out fractional quantity executions (< 1 share) for display
+    // These are typically IBKR price improvement rebates
+    const displayExecutions = executions.filter((exec) => {
+      const qty = typeof exec.quantity === 'number' ? exec.quantity : parseFloat(String(exec.quantity));
+      return qty >= 1;
+    });
+
     const actionGroups: Record<string, TradeExecution[]> = {};
 
-    executions.forEach((exec) => {
+    displayExecutions.forEach((exec) => {
       const expDate = exec.expiration ? new Date(exec.expiration).toISOString().split('T')[0] : 'no-exp';
       const action = getActionLabel(exec);
       const key = `${exec.strike}_${exec.option_type}_${expDate}_${action}`;
@@ -225,9 +290,16 @@ export default function PositionsPage() {
 
   // Pair transactions for expanded view
   function pairTransactions(executions: TradeExecution[]) {
+    // Filter out fractional quantity executions (< 1 share) for display
+    // These are typically IBKR price improvement rebates
+    const displayExecutions = executions.filter((exec) => {
+      const qty = typeof exec.quantity === 'number' ? exec.quantity : parseFloat(String(exec.quantity));
+      return qty >= 1;
+    });
+
     const groups: Record<string, TradeExecution[]> = {};
 
-    executions.forEach((exec) => {
+    displayExecutions.forEach((exec) => {
       const expDate = exec.expiration ? new Date(exec.expiration).toISOString().split('T')[0] : 'no-exp';
       const key = `${exec.strike}_${exec.option_type}_${expDate}`;
       if (!groups[key]) {
@@ -262,7 +334,9 @@ export default function PositionsPage() {
 
       const openCommission = openingExecs.reduce((sum, e) => sum + parseFloat(e.commission), 0);
       const closeCommission = closingExecs.reduce((sum, e) => sum + parseFloat(e.commission), 0);
-      const multiplier = execs[0].multiplier || 100;
+      // Stock trades have multiplier=1 (no 100x), even if stored incorrectly as 100
+      const isStock = execs[0].security_type === 'STK';
+      const multiplier = isStock ? 1 : (execs[0].multiplier || 100);
 
       const netPnl = closingQty > 0
         ? (isLongPosition
@@ -397,13 +471,26 @@ export default function PositionsPage() {
                     ? Math.ceil((expiration.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
                     : null;
 
-                  const qty = aggregated.length > 0
+                  const rawQty = aggregated.length > 0
                     ? Math.min(...aggregated.map(g => g.totalQuantity))
                     : 0;
 
-                  const netPrice = qty > 0
-                    ? parseFloat(trade.opening_cost) / qty / 100
+                  // Stock trades don't have a 100x multiplier
+                  const isStockTrade = trade.strategy_type?.toLowerCase().includes('stock');
+                  const priceMultiplier = isStockTrade ? 1 : 100;
+
+                  // Apply split adjustments for stock trades
+                  const qty = isStockTrade
+                    ? applyQuantitySplitAdjustment(trade.underlying, rawQty, trade.opened_at)
+                    : rawQty;
+
+                  const rawPrice = rawQty > 0
+                    ? parseFloat(trade.opening_cost) / rawQty / priceMultiplier
                     : 0;
+
+                  const netPrice = isStockTrade
+                    ? applyPriceSplitAdjustment(trade.underlying, rawPrice, trade.opened_at)
+                    : rawPrice;
 
                   const netValue = aggregated.reduce((sum, g) => sum + g.totalValue, 0);
                   const totalComm = aggregated.reduce((sum, g) => sum + g.totalCommission, 0);
@@ -475,6 +562,17 @@ export default function PositionsPage() {
                       {expandedTrades.has(trade.id) && executions.length > 0 && (
                         <tr>
                           <td colSpan={11} className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50">
+                            {/* Data Source Indicator */}
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
+                                Source: IBKR
+                              </span>
+                              {executions[0]?.exec_id && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                  Exec ID: {executions[0].exec_id.substring(0, 20)}...
+                                </span>
+                              )}
+                            </div>
                             <table className="min-w-full">
                               <thead>
                                 <tr className="border-b border-gray-300 dark:border-gray-600">
@@ -489,32 +587,44 @@ export default function PositionsPage() {
                                 </tr>
                               </thead>
                               <tbody>
-                                {pairTransactions(executions).map((pair: any, idx: number) => (
-                                  <tr key={idx} className="border-b border-gray-200 dark:border-gray-600">
-                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
-                                      {pair.dateOpened ? formatDate(pair.dateOpened.toISOString()) : '-'}
-                                    </td>
-                                    <td className="px-3 py-2 text-sm">
-                                      <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-                                        {pair.action.includes('Long') ? '+' : '-'} {pair.action}
-                                      </span>
-                                    </td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">{pair.quantity}</td>
-                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{pair.type}</td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">
-                                      {pair.strike ? `$${pair.strike}` : '-'}
-                                    </td>
-                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
-                                      {pair.expiration ? formatDate(pair.expiration) : '-'}
-                                    </td>
-                                    <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
-                                      {pair.openPrice !== null ? `$${Math.abs(pair.openPrice).toFixed(2)}` : '-'}
-                                    </td>
-                                    <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
-                                      ${pair.totalCommission.toFixed(2)}
-                                    </td>
-                                  </tr>
-                                ))}
+                                {pairTransactions(executions).map((pair: any, idx: number) => {
+                                  // Apply split adjustments for stock positions
+                                  const isStockPosition = pair.type === 'Stock';
+                                  const execDate = pair.dateOpened ? pair.dateOpened.toISOString() : trade.opened_at;
+                                  const displayQty = isStockPosition
+                                    ? applyQuantitySplitAdjustment(trade.underlying, pair.quantity, execDate)
+                                    : pair.quantity;
+                                  const displayPrice = isStockPosition && pair.openPrice !== null
+                                    ? applyPriceSplitAdjustment(trade.underlying, Math.abs(pair.openPrice), execDate)
+                                    : pair.openPrice !== null ? Math.abs(pair.openPrice) : null;
+
+                                  return (
+                                    <tr key={idx} className="border-b border-gray-200 dark:border-gray-600">
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
+                                        {pair.dateOpened ? formatDate(pair.dateOpened.toISOString()) : '-'}
+                                      </td>
+                                      <td className="px-3 py-2 text-sm">
+                                        <span className={`font-semibold ${pair.action.includes('Long') ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                                          {pair.action.includes('Long') ? '+' : '-'} {pair.action}
+                                        </span>
+                                      </td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">{displayQty}</td>
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{pair.type}</td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">
+                                        {pair.strike ? `$${pair.strike}` : '-'}
+                                      </td>
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
+                                        {pair.expiration ? formatDate(pair.expiration) : '-'}
+                                      </td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
+                                        {displayPrice !== null ? `$${displayPrice.toFixed(2)}` : '-'}
+                                      </td>
+                                      <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
+                                        ${pair.totalCommission.toFixed(2)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </td>

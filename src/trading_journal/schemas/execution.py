@@ -23,7 +23,7 @@ class ExecutionBase(BaseModel):
     multiplier: int | None = Field(None, description="Contract multiplier")
     side: str = Field(..., description="Side (BOT or SLD)", max_length=10)
     open_close_indicator: str | None = Field(None, description="Open/Close indicator (O or C)", max_length=1)
-    quantity: int = Field(..., description="Quantity executed")
+    quantity: Decimal = Field(..., description="Quantity executed (supports fractional shares)")
     price: Decimal = Field(..., description="Execution price")
     commission: Decimal = Field(default=Decimal("0.00"), description="Commission paid")
     net_amount: Decimal = Field(..., description="Net amount (price * qty * multiplier)")

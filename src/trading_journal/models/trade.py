@@ -4,9 +4,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_journal.core.database import Base
+
+
+def utcnow() -> datetime:
+    """Return current UTC time as a timezone-aware datetime."""
+    return datetime.now(UTC)
 
 
 class Trade(Base):
@@ -28,12 +33,12 @@ class Trade(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     # Status: OPEN, CLOSED, EXPIRED, ROLLED
 
-    # Timestamps
-    opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    # Timestamps (timezone-aware)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
     # P&L tracking
@@ -107,6 +112,15 @@ class Trade(Base):
     greeks_source: Mapped[str | None] = mapped_column(String(20))  # IBKR, POLYGON, CALCULATED
     greeks_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # ===========================================
+    # Tag relationship (many-to-many)
+    # ===========================================
+    tag_list: Mapped[list["Tag"]] = relationship(
+        "Tag",
+        secondary="trade_tags",
+        back_populates="trades",
+    )
+
     @property
     def days_held(self) -> int | None:
         """Calculate days held from open to close (or current date if still open)."""
@@ -127,3 +141,7 @@ class Trade(Base):
             f"status={self.status}, "
             f"pnl={self.total_pnl})>"
         )
+
+
+# Import Tag at the end to avoid circular import
+from trading_journal.models.tag import Tag  # noqa: E402, F401

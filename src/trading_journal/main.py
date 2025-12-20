@@ -11,10 +11,13 @@ from trading_journal.api.routes import (
     dashboard,
     executions,
     greeks,
+    market_data,
     performance,
     positions,
     rolls,
     splits,
+    stock_splits,
+    tags,
     trade_analytics,
     trades,
 )
@@ -59,8 +62,11 @@ app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(performance.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
 app.include_router(splits.router, prefix="/api/v1")
+app.include_router(stock_splits.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(trade_analytics.router, prefix="/api/v1")
+app.include_router(market_data.router, prefix="/api/v1")
+app.include_router(tags.router, prefix="/api/v1")
 
 
 @app.get("/")

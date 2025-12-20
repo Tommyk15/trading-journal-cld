@@ -1,9 +1,11 @@
 """API routes for trades."""
 
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from trading_journal.core.database import get_db
 from trading_journal.models.execution import Execution
@@ -69,6 +71,8 @@ async def list_trades(
     underlying: str | None = Query(None, description="Filter by underlying symbol"),
     status: str | None = Query(None, description="Filter by status (OPEN, CLOSED)"),
     strategy_type: str | None = Query(None, description="Filter by strategy type"),
+    start_date: datetime | None = Query(None, description="Filter trades opened on or after this date"),
+    end_date: datetime | None = Query(None, description="Filter trades opened on or before this date"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results offset"),
     session: AsyncSession = Depends(get_db),
@@ -79,6 +83,8 @@ async def list_trades(
         underlying: Filter by underlying
         status: Filter by status
         strategy_type: Filter by strategy type
+        start_date: Filter by start date (trades opened on or after)
+        end_date: Filter by end date (trades opened on or before)
         limit: Max results
         offset: Results offset
         session: Database session
@@ -89,6 +95,7 @@ async def list_trades(
     # Build query - show all trades, no deduplication
     stmt = (
         select(Trade)
+        .options(selectinload(Trade.tag_list))
         .where(Trade.num_executions > 0)  # Only execution-based trades
         .order_by(Trade.opened_at.desc())
     )
@@ -100,6 +107,10 @@ async def list_trades(
         stmt = stmt.where(Trade.status == status)
     if strategy_type:
         stmt = stmt.where(Trade.strategy_type == strategy_type)
+    if start_date:
+        stmt = stmt.where(Trade.opened_at >= start_date)
+    if end_date:
+        stmt = stmt.where(Trade.opened_at <= end_date)
 
     # Get total count before pagination
     count_stmt = select(func.count()).select_from(
@@ -109,7 +120,7 @@ async def list_trades(
     )
 
     # Apply same filters to count
-    if underlying or status or strategy_type:
+    if underlying or status or strategy_type or start_date or end_date:
         count_stmt = select(func.count(Trade.id)).where(Trade.num_executions > 0)
         if underlying:
             count_stmt = count_stmt.where(Trade.underlying == underlying)
@@ -117,6 +128,10 @@ async def list_trades(
             count_stmt = count_stmt.where(Trade.status == status)
         if strategy_type:
             count_stmt = count_stmt.where(Trade.strategy_type == strategy_type)
+        if start_date:
+            count_stmt = count_stmt.where(Trade.opened_at >= start_date)
+        if end_date:
+            count_stmt = count_stmt.where(Trade.opened_at <= end_date)
 
     total_result = await session.execute(count_stmt)
     total = total_result.scalar() or 0
@@ -213,7 +228,11 @@ async def get_trade(
     Raises:
         HTTPException: If trade not found
     """
-    stmt = select(Trade).where(Trade.id == trade_id)
+    stmt = (
+        select(Trade)
+        .options(selectinload(Trade.tag_list))
+        .where(Trade.id == trade_id)
+    )
     result = await session.execute(stmt)
     trade = result.scalar_one_or_none()
 
@@ -242,7 +261,11 @@ async def update_trade(
     Raises:
         HTTPException: If trade not found
     """
-    stmt = select(Trade).where(Trade.id == trade_id)
+    stmt = (
+        select(Trade)
+        .options(selectinload(Trade.tag_list))
+        .where(Trade.id == trade_id)
+    )
     result = await session.execute(stmt)
     trade = result.scalar_one_or_none()
 
@@ -259,6 +282,15 @@ async def update_trade(
 
     await session.commit()
     await session.refresh(trade)
+
+    # Re-fetch with tag_list to ensure proper serialization
+    stmt = (
+        select(Trade)
+        .options(selectinload(Trade.tag_list))
+        .where(Trade.id == trade_id)
+    )
+    result = await session.execute(stmt)
+    trade = result.scalar_one_or_none()
 
     return TradeResponse.model_validate(trade)
 

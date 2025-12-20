@@ -248,6 +248,7 @@ async def list_executions(
     end_date: datetime | None = Query(None, description="End date filter"),
     unassigned_only: bool = Query(False, description="Filter to unassigned executions only"),
     opens_only: bool = Query(False, description="Filter to only opening transactions (BTO/STO)"),
+    orphans_only: bool = Query(False, description="Filter to orphan closes (unassigned closing transactions)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results offset"),
     session: AsyncSession = Depends(get_db),
@@ -260,6 +261,7 @@ async def list_executions(
         end_date: End date
         unassigned_only: Only show executions not assigned to a trade
         opens_only: Only show opening transactions (BTO/STO)
+        orphans_only: Only show orphan closes (unassigned closing transactions)
         limit: Max results
         offset: Results offset
         session: Database session
@@ -272,6 +274,7 @@ async def list_executions(
     executions, total = await service.list_executions_with_filter(
         unassigned_only=unassigned_only,
         opens_only=opens_only,
+        orphans_only=orphans_only,
         underlying=underlying,
         start_date=start_date,
         end_date=end_date,

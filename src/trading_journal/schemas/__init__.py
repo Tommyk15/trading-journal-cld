@@ -7,6 +7,13 @@ from trading_journal.schemas.execution import (
     ExecutionSyncRequest,
     ExecutionSyncResponse,
 )
+from trading_journal.schemas.tag import (
+    TagCreate,
+    TagListResponse,
+    TagResponse,
+    TagUpdate,
+    TradeTagsUpdate,
+)
 from trading_journal.schemas.trade import (
     TradeCreate,
     TradeList,
@@ -22,6 +29,11 @@ __all__ = [
     "ExecutionList",
     "ExecutionSyncRequest",
     "ExecutionSyncResponse",
+    "TagCreate",
+    "TagResponse",
+    "TagListResponse",
+    "TagUpdate",
+    "TradeTagsUpdate",
     "TradeCreate",
     "TradeResponse",
     "TradeList",

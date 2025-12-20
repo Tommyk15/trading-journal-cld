@@ -176,6 +176,7 @@ class ExecutionService:
         self,
         unassigned_only: bool = False,
         opens_only: bool = False,
+        orphans_only: bool = False,
         underlying: str | None = None,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
@@ -187,6 +188,7 @@ class ExecutionService:
         Args:
             unassigned_only: Filter to only executions not assigned to a trade
             opens_only: Filter to only opening transactions (O indicator)
+            orphans_only: Filter to orphan closes (unassigned + closing indicator)
             underlying: Filter by underlying symbol
             start_date: Filter by start date
             end_date: Filter by end date
@@ -199,7 +201,13 @@ class ExecutionService:
         stmt = select(Execution)
 
         # Apply filters
-        if unassigned_only:
+        if orphans_only:
+            # Orphans are unassigned closing transactions
+            stmt = stmt.where(
+                Execution.trade_id.is_(None),
+                Execution.open_close_indicator == 'C'
+            )
+        elif unassigned_only:
             stmt = stmt.where(Execution.trade_id.is_(None))
         if opens_only:
             stmt = stmt.where(Execution.open_close_indicator == 'O')
@@ -212,7 +220,12 @@ class ExecutionService:
 
         # Get total count with same filters
         count_stmt = select(func.count(Execution.id))
-        if unassigned_only:
+        if orphans_only:
+            count_stmt = count_stmt.where(
+                Execution.trade_id.is_(None),
+                Execution.open_close_indicator == 'C'
+            )
+        elif unassigned_only:
             count_stmt = count_stmt.where(Execution.trade_id.is_(None))
         if opens_only:
             count_stmt = count_stmt.where(Execution.open_close_indicator == 'O')

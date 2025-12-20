@@ -128,10 +128,45 @@ class PositionStateMachine:
             Unique leg key string
         """
         if exec.security_type == "OPT":
-            expiry = exec.expiration.strftime("%Y%m%d") if exec.expiration else ""
+            expiry = self._normalize_expiration_date(exec.expiration)
             strike = f"{exec.strike}" if exec.strike else ""
             return f"{expiry}_{strike}_{exec.option_type}"
         return "STK"
+
+    def _normalize_expiration_date(self, expiration: datetime | None) -> str:
+        """Normalize expiration datetime to YYYYMMDD string.
+
+        Options expire on a specific calendar date, but may be stored with
+        different times depending on the source timezone. This method
+        normalizes to the intended expiration date.
+
+        For example:
+        - 2025-12-19 00:00:00+02:00 (Israel) = 2025-12-18 22:00:00 UTC
+        - 2025-12-19 02:00:00+02:00 (Israel) = 2025-12-19 00:00:00 UTC
+
+        Both refer to options expiring on Dec 19, so we need to normalize.
+        We detect this by checking if the UTC time is after 20:00 (8 PM),
+        which indicates midnight in a timezone east of UTC like Israel (+2).
+
+        Args:
+            expiration: Expiration datetime
+
+        Returns:
+            Normalized date string in YYYYMMDD format
+        """
+        if not expiration:
+            return ""
+
+        # Get the UTC time components
+        utc_hour = expiration.hour  # Already in UTC if stored with timezone
+
+        # If UTC time is 20:00 or later (8 PM+), it's likely midnight or later
+        # in an eastern timezone (like Israel +2 or +3), so add a day
+        if utc_hour >= 20:
+            from datetime import timedelta
+            expiration = expiration + timedelta(days=1)
+
+        return expiration.strftime("%Y%m%d")
 
     def is_flat(self) -> bool:
         """Check if all positions are flat."""

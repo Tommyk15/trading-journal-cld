@@ -452,25 +452,49 @@ async def fetch_trade_greeks(
         )
 
     # Build unique legs from executions (by strike/expiration/type)
+    # For CLOSED trades: use opening legs (open_close_indicator = 'O')
+    # For OPEN trades: use current net position
     legs_map: dict[tuple, dict] = {}
-    for exec in executions:
-        if exec.option_type and exec.strike and exec.expiration:
-            key = (exec.option_type, exec.strike, exec.expiration)
-            if key not in legs_map:
-                legs_map[key] = {
-                    "option_type": exec.option_type,
-                    "strike": exec.strike,
-                    "expiration": exec.expiration,
-                    "quantity": 0,
-                }
-            # Accumulate quantity (BOT adds, SLD subtracts for closing)
-            if exec.side == "BOT":
-                legs_map[key]["quantity"] += exec.quantity
-            else:
-                legs_map[key]["quantity"] -= exec.quantity
 
-    # Filter to legs with non-zero quantity (still open)
-    active_legs = [v for v in legs_map.values() if v["quantity"] != 0]
+    if trade.status == "CLOSED":
+        # For closed trades, look at the opening transactions
+        for exec in executions:
+            if exec.option_type and exec.strike and exec.expiration:
+                # Only include opening transactions
+                if exec.open_close_indicator == "O":
+                    key = (exec.option_type, exec.strike, exec.expiration)
+                    if key not in legs_map:
+                        legs_map[key] = {
+                            "option_type": exec.option_type,
+                            "strike": exec.strike,
+                            "expiration": exec.expiration,
+                            "quantity": 0,
+                        }
+                    # BOT = long, SLD = short (for opens)
+                    if exec.side == "BOT":
+                        legs_map[key]["quantity"] += exec.quantity
+                    else:
+                        legs_map[key]["quantity"] -= exec.quantity
+        active_legs = list(legs_map.values())
+    else:
+        # For open trades, use net position (existing logic)
+        for exec in executions:
+            if exec.option_type and exec.strike and exec.expiration:
+                key = (exec.option_type, exec.strike, exec.expiration)
+                if key not in legs_map:
+                    legs_map[key] = {
+                        "option_type": exec.option_type,
+                        "strike": exec.strike,
+                        "expiration": exec.expiration,
+                        "quantity": 0,
+                    }
+                # Accumulate quantity (BOT adds, SLD subtracts for closing)
+                if exec.side == "BOT":
+                    legs_map[key]["quantity"] += exec.quantity
+                else:
+                    legs_map[key]["quantity"] -= exec.quantity
+        # Filter to legs with non-zero quantity (still open)
+        active_legs = [v for v in legs_map.values() if v["quantity"] != 0]
 
     if not active_legs:
         return FetchGreeksResponse(
@@ -557,7 +581,8 @@ async def fetch_trade_greeks(
             risk_free_rate = Decimal("0.05")
 
         analytics_service = TradeAnalyticsService(risk_free_rate=risk_free_rate)
-        net_greeks = analytics_service.calculate_net_greeks(leg_data_list)
+        # Use multiplier=1 to store per-contract Greeks (not position-level)
+        net_greeks = analytics_service.calculate_net_greeks(leg_data_list, multiplier=1)
         trade_iv = analytics_service.get_trade_iv(leg_data_list, trade.strategy_type)
 
         # Update trade with analytics

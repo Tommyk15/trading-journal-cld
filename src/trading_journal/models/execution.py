@@ -26,9 +26,9 @@ class Execution(Base):
     order_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     perm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
-    # Timestamps
-    execution_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    # Timestamps (timezone-aware)
+    execution_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
     # Contract details
     underlying: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
@@ -39,13 +39,13 @@ class Execution(Base):
     # Option-specific fields (NULL for stocks)
     option_type: Mapped[str | None] = mapped_column(String(1))  # C or P
     strike: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
-    expiration: Mapped[datetime | None] = mapped_column(DateTime)
+    expiration: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     multiplier: Mapped[int | None] = mapped_column(Integer, default=100)
 
     # Execution details
     side: Mapped[str] = mapped_column(String(10), nullable=False)  # BOT or SLD
     open_close_indicator: Mapped[str | None] = mapped_column(String(1))  # O or C
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)  # Supports fractional shares
     price: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     commission: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
 

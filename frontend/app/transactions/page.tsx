@@ -1,12 +1,21 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { RefreshCw, Plus, Sparkles, Layers, Download, ChevronLeft, ChevronRight, Filter, X, Check, ChevronDown, ChevronUp, Cog } from 'lucide-react';
+import { RefreshCw, Plus, Layers, Download, ChevronLeft, ChevronRight, Filter, X, Cog, Play, AlertTriangle } from 'lucide-react';
 import { api } from '@/lib/api/client';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
-import type { Execution, SuggestedGroup, SuggestGroupingResponse } from '@/types';
+import type { Execution } from '@/types';
 import { CreateTradeModal } from '@/components/transactions/CreateTradeModal';
-import { SuggestGroupingModal } from '@/components/transactions/SuggestGroupingModal';
+
+// Format quantity - show whole numbers for integers, up to 4 decimals for fractional
+function formatQuantity(qty: number | string): string {
+  const num = typeof qty === 'string' ? parseFloat(qty) : qty;
+  if (isNaN(num)) return '0';
+  // If it's a whole number, show without decimals
+  if (Number.isInteger(num)) return num.toString();
+  // Otherwise show up to 4 decimal places, trimming trailing zeros
+  return num.toFixed(4).replace(/\.?0+$/, '');
+}
 
 interface ExecutionListResponse {
   executions: Execution[];
@@ -53,18 +62,12 @@ export default function TransactionsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
   const [showOpensOnly, setShowOpensOnly] = useState(true); // Default: only show BTO/STO
+  const [showOrphansOnly, setShowOrphansOnly] = useState(false);
   const [underlyingFilter, setUnderlyingFilter] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showSuggestModal, setShowSuggestModal] = useState(false);
   const [total, setTotal] = useState(0);
   const [groupSimilar, setGroupSimilar] = useState(true);
 
-  // Suggested groupings state
-  const [suggestions, setSuggestions] = useState<SuggestedGroup[]>([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(true);
-  const [acceptingGroup, setAcceptingGroup] = useState<number | null>(null);
-  const [expandedLegs, setExpandedLegs] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState<{
@@ -105,13 +108,16 @@ export default function TransactionsPage() {
         skip?: number;
         unassigned_only?: boolean;
         opens_only?: boolean;
+        orphans_only?: boolean;
         underlying?: string;
       } = { limit, skip: offset };
 
-      if (showUnassignedOnly) {
+      if (showOrphansOnly) {
+        params.orphans_only = true;
+      } else if (showUnassignedOnly) {
         params.unassigned_only = true;
       }
-      if (showOpensOnly) {
+      if (showOpensOnly && !showOrphansOnly) {
         params.opens_only = true;
       }
       if (underlyingFilter.trim()) {
@@ -127,7 +133,7 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [showUnassignedOnly, showOpensOnly, underlyingFilter, usePagination, currentPage, pageSize]);
+  }, [showUnassignedOnly, showOpensOnly, showOrphansOnly, underlyingFilter, usePagination, currentPage, pageSize]);
 
   useEffect(() => {
     fetchExecutions();
@@ -136,51 +142,36 @@ export default function TransactionsPage() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [showUnassignedOnly, showOpensOnly, underlyingFilter, strikeFilter, typeFilter, actionFilter, expirationFilter, startDateFilter, endDateFilter]);
+  }, [showUnassignedOnly, showOpensOnly, showOrphansOnly, underlyingFilter, strikeFilter, typeFilter, actionFilter, expirationFilter, startDateFilter, endDateFilter]);
 
-  // Fetch suggested groupings
-  const fetchSuggestions = useCallback(async () => {
-    setLoadingSuggestions(true);
+  // Process new (unassigned) executions into trades
+  const processNewExecutions = useCallback(async () => {
+    setReprocessing(true);
+    setReprocessMessage(null);
+    setError(null);
     try {
-      const response = await api.trades.suggestGrouping() as SuggestGroupingResponse;
-      setSuggestions(response.groups || []);
+      const result = await api.trades.processNew();
+      if (result.trades_created > 0) {
+        setReprocessMessage(`Processed ${result.executions_processed} new executions into ${result.trades_created} trades`);
+      } else {
+        setReprocessMessage('No new unassigned executions to process');
+      }
+      await fetchExecutions();
     } catch (err) {
-      console.error('Error fetching suggestions:', err);
-      setSuggestions([]);
+      console.error('Error processing new executions:', err);
+      setError(err instanceof Error ? err.message : 'Failed to process new executions');
     } finally {
-      setLoadingSuggestions(false);
+      setReprocessing(false);
     }
-  }, []);
+  }, [fetchExecutions]);
 
-  // Fetch suggestions on mount and after creating trades
-  useEffect(() => {
-    fetchSuggestions();
-  }, [fetchSuggestions]);
-
-  // Accept a suggested grouping and create trade
-  const handleAcceptGroup = async (group: SuggestedGroup, index: number) => {
-    setAcceptingGroup(index);
-    try {
-      await api.trades.createManual({
-        execution_ids: group.execution_ids,
-        strategy_type: group.suggested_strategy,
-      });
-      // Refresh both executions and suggestions
-      await Promise.all([fetchExecutions(), fetchSuggestions()]);
-    } catch (err) {
-      console.error('Error creating trade from suggestion:', err);
-      alert(err instanceof Error ? err.message : 'Failed to create trade');
-    } finally {
-      setAcceptingGroup(null);
-    }
-  };
-
-  // Sync from IBKR Flex Query with progress
+  // Sync from IBKR Flex Query with progress, then auto-process new executions
   const handleSyncFromIBKR = async () => {
     setSyncing(true);
     setSyncMessage(null);
     setSyncProgress(null);
     setError(null);
+    let newExecutionsCount = 0;
     try {
       await api.executions.syncFlexQueryWithProgress((data) => {
         setSyncProgress({
@@ -190,10 +181,22 @@ export default function TransactionsPage() {
           current: data.current,
         });
 
+        // Track new executions from sync
+        if (data.new !== undefined) {
+          newExecutionsCount = data.new;
+        }
+
         if (data.status === 'complete') {
-          setSyncMessage(data.message);
           setSyncProgress(null);
-          fetchExecutions();
+          // Auto-process new executions if any were synced
+          if (newExecutionsCount > 0) {
+            setSyncMessage(`Synced ${newExecutionsCount} new executions. Processing into trades...`);
+            // Automatically process new executions
+            processNewExecutions();
+          } else {
+            setSyncMessage(data.message);
+            fetchExecutions();
+          }
         } else if (data.status === 'error') {
           setError(data.message);
           setSyncProgress(null);
@@ -219,8 +222,7 @@ export default function TransactionsPage() {
     try {
       const result = await api.trades.reprocessAll();
       setReprocessMessage(result.message);
-      // Refresh executions and suggestions
-      await Promise.all([fetchExecutions(), fetchSuggestions()]);
+      await fetchExecutions();
     } catch (err) {
       console.error('Error reprocessing trades:', err);
       setError(err instanceof Error ? err.message : 'Failed to reprocess trades');
@@ -314,7 +316,6 @@ export default function TransactionsPage() {
   // After trade created, refresh and clear selection
   const handleTradeCreated = () => {
     setShowCreateModal(false);
-    setShowSuggestModal(false);
     setSelectedIds(new Set());
     fetchExecutions();
   };
@@ -325,6 +326,7 @@ export default function TransactionsPage() {
   // Summary stats from filtered data
   const unassignedCount = filteredExecutions.filter((e) => !e.trade_id).length;
   const assignedCount = filteredExecutions.filter((e) => e.trade_id).length;
+  const orphanCount = filteredExecutions.filter((e) => !e.trade_id && e.open_close_indicator === 'C').length;
 
   // Group executions by order_id (fills from the same order)
   const groupedExecutions = useMemo(() => {
@@ -345,7 +347,7 @@ export default function TransactionsPage() {
       if (groups.has(key)) {
         const group = groups.get(key)!;
         group.executions.push(exec);
-        group.totalQuantity += exec.quantity;
+        group.totalQuantity += Number(exec.quantity);
         group.totalCommission += Number(exec.commission);
         group.totalNetAmount += Number(exec.net_amount);
         // Check if all executions have the same trade_id
@@ -364,8 +366,8 @@ export default function TransactionsPage() {
           strike: exec.strike,
           expiration: exec.expiration,
           execution_time: exec.execution_time,
-          totalQuantity: exec.quantity,
-          avgPrice: exec.price,
+          totalQuantity: Number(exec.quantity),
+          avgPrice: Number(exec.price),
           totalCommission: Number(exec.commission),
           totalNetAmount: Number(exec.net_amount),
           trade_id: exec.trade_id,
@@ -378,7 +380,7 @@ export default function TransactionsPage() {
     groups.forEach((group) => {
       if (group.executions.length > 1) {
         const totalValue = group.executions.reduce(
-          (sum, e) => sum + e.price * e.quantity,
+          (sum, e) => sum + Number(e.price) * Number(e.quantity),
           0
         );
         group.avgPrice = totalValue / group.totalQuantity;
@@ -477,7 +479,7 @@ export default function TransactionsPage() {
 
       <div className="p-6 space-y-6">
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 transition-colors">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Total Executions
@@ -498,6 +500,19 @@ export default function TransactionsPage() {
             <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Unassigned</div>
             <div className="mt-1 text-2xl font-semibold text-orange-600 dark:text-orange-400">
               {unassignedCount}
+            </div>
+          </div>
+          <div
+            className={`bg-white dark:bg-gray-800 rounded-lg shadow p-4 transition-colors cursor-pointer hover:ring-2 hover:ring-yellow-500 ${showOrphansOnly ? 'ring-2 ring-yellow-500' : ''}`}
+            onClick={() => setShowOrphansOnly(!showOrphansOnly)}
+            title="Click to filter orphan closes (closing transactions without matching opens)"
+          >
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4 text-yellow-600" />
+              Orphans
+            </div>
+            <div className="mt-1 text-2xl font-semibold text-yellow-600 dark:text-yellow-400">
+              {orphanCount}
             </div>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 transition-colors">
@@ -559,10 +574,31 @@ export default function TransactionsPage() {
                 <input
                   type="checkbox"
                   checked={showUnassignedOnly}
-                  onChange={(e) => setShowUnassignedOnly(e.target.checked)}
+                  onChange={(e) => {
+                    setShowUnassignedOnly(e.target.checked);
+                    if (e.target.checked) setShowOrphansOnly(false);
+                  }}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-800 dark:text-gray-200">Unassigned only</span>
+              </label>
+
+              {/* Orphans Filter Toggle */}
+              <label className="flex items-center gap-2 cursor-pointer" title="Show orphan closes (closing transactions without matching opens)">
+                <input
+                  type="checkbox"
+                  checked={showOrphansOnly}
+                  onChange={(e) => {
+                    setShowOrphansOnly(e.target.checked);
+                    if (e.target.checked) {
+                      setShowUnassignedOnly(false);
+                      setShowOpensOnly(false);
+                    }
+                  }}
+                  className="rounded border-gray-300 text-yellow-600 focus:ring-yellow-500"
+                />
+                <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                <span className="text-sm text-gray-800 dark:text-gray-200">Orphans only</span>
               </label>
 
               {/* Underlying Filter */}
@@ -614,13 +650,21 @@ export default function TransactionsPage() {
                   Create Trade ({selectedIds.size})
                 </button>
               )}
-              <button
-                onClick={() => setShowSuggestModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
-              >
-                <Sparkles className="h-4 w-4" />
-                Suggest Grouping
-              </button>
+              {unassignedCount > 0 && (
+                <button
+                  onClick={processNewExecutions}
+                  disabled={reprocessing}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Process unassigned executions into trades"
+                >
+                  {reprocessing ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  Process New ({unassignedCount})
+                </button>
+              )}
             </div>
           </div>
 
@@ -718,220 +762,6 @@ export default function TransactionsPage() {
             </div>
           )}
         </div>
-
-        {/* Suggested Groupings Section */}
-        {suggestions.length > 0 && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden transition-colors">
-            <button
-              onClick={() => setShowSuggestions(!showSuggestions)}
-              className="w-full px-4 py-3 flex items-center justify-between bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/30 dark:to-indigo-900/30 hover:from-purple-100 hover:to-indigo-100 dark:hover:from-purple-900/40 dark:hover:to-indigo-900/40 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <Sparkles className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-                <span className="font-medium text-gray-900 dark:text-white">
-                  Suggested Groupings
-                </span>
-                <span className="bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full text-xs font-medium">
-                  {suggestions.length} suggestion{suggestions.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-              {showSuggestions ? (
-                <ChevronUp className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-              ) : (
-                <ChevronDown className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-              )}
-            </button>
-
-            {showSuggestions && (
-              <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
-                {loadingSuggestions ? (
-                  <div className="flex items-center justify-center py-4 text-gray-500 dark:text-gray-400">
-                    <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-                    Loading suggestions...
-                  </div>
-                ) : (
-                  suggestions.map((group, index) => {
-                    const toggleLegExpanded = (legKey: string) => {
-                      const newExpanded = new Set(expandedLegs);
-                      if (newExpanded.has(legKey)) {
-                        newExpanded.delete(legKey);
-                      } else {
-                        newExpanded.add(legKey);
-                      }
-                      setExpandedLegs(newExpanded);
-                    };
-
-                    return (
-                      <div
-                        key={index}
-                        className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-purple-300 dark:hover:border-purple-600 transition-colors"
-                      >
-                        <div className="flex items-start gap-4">
-                          {/* Left: Underlying, Strategy, Status, and Info */}
-                          <div className="w-48 flex-shrink-0">
-                            <span className="font-semibold text-lg text-gray-900 dark:text-white">
-                              {group.underlying}
-                            </span>
-                            <div className="mt-1">
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200">
-                                {group.suggested_strategy}
-                              </span>
-                            </div>
-                            <div className="mt-1">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                group.status === 'CLOSED'
-                                  ? 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
-                                  : 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'
-                              }`}>
-                                {group.status}
-                              </span>
-                            </div>
-                            <div className="mt-2 text-xs text-gray-600 dark:text-gray-400 space-y-1">
-                              <div>{group.num_executions} execution{group.num_executions !== 1 ? 's' : ''}</div>
-                              {group.open_date && (
-                                <div>Opened: {formatDate(group.open_date)}</div>
-                              )}
-                              {group.status === 'CLOSED' && group.total_pnl !== undefined && (
-                                <div className={group.total_pnl >= 0 ? 'text-green-600 dark:text-green-400 font-medium' : 'text-red-600 dark:text-red-400 font-medium'}>
-                                  P/L: {formatCurrency(group.total_pnl)}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Middle: Legs displayed vertically with expandable fills */}
-                          <div className="flex-1 space-y-2">
-                            {group.legs.map((leg, legIndex) => {
-                              const legKey = `${index}-${legIndex}`;
-                              const isExpanded = expandedLegs.has(legKey);
-                              const hasFills = leg.fills && leg.fills.length > 0;
-
-                              return (
-                                <div key={legIndex} className="border border-gray-100 dark:border-gray-700 rounded-lg overflow-hidden">
-                                  {/* Leg header - clickable to expand */}
-                                  <button
-                                    onClick={() => hasFills && toggleLegExpanded(legKey)}
-                                    disabled={!hasFills}
-                                    className={`w-full px-3 py-2 flex items-center justify-between text-left ${
-                                      leg.option_type === 'P'
-                                        ? 'bg-red-50 dark:bg-red-900/20'
-                                        : leg.option_type === 'C'
-                                        ? 'bg-green-50 dark:bg-green-900/20'
-                                        : 'bg-gray-50 dark:bg-gray-800'
-                                    } ${hasFills ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <span className={`font-medium text-sm ${
-                                        leg.option_type === 'P'
-                                          ? 'text-red-700 dark:text-red-300'
-                                          : leg.option_type === 'C'
-                                          ? 'text-green-700 dark:text-green-300'
-                                          : 'text-gray-700 dark:text-gray-300'
-                                      }`}>
-                                        {leg.total_quantity > 0 ? '+' : ''}{leg.total_quantity}x {leg.option_type === 'C' ? 'Call' : leg.option_type === 'P' ? 'Put' : 'Stock'}
-                                      </span>
-                                      {leg.strike && (
-                                        <span className="text-sm text-gray-600 dark:text-gray-400">
-                                          ${leg.strike}
-                                        </span>
-                                      )}
-                                      {leg.expiration && (
-                                        <span className="text-sm text-gray-500 dark:text-gray-500">
-                                          {formatDate(leg.expiration)}
-                                        </span>
-                                      )}
-                                      {hasFills && (
-                                        <span className="text-xs text-gray-500 dark:text-gray-500">
-                                          ({leg.fills.length} fill{leg.fills.length !== 1 ? 's' : ''})
-                                        </span>
-                                      )}
-                                    </div>
-                                    {hasFills && (
-                                      isExpanded ? (
-                                        <ChevronUp className="h-4 w-4 text-gray-400" />
-                                      ) : (
-                                        <ChevronDown className="h-4 w-4 text-gray-400" />
-                                      )
-                                    )}
-                                  </button>
-
-                                  {/* Expanded fills */}
-                                  {isExpanded && hasFills && (
-                                    <div className="border-t border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800">
-                                      <table className="w-full text-xs">
-                                        <thead className="bg-gray-50 dark:bg-gray-900">
-                                          <tr>
-                                            <th className="px-2 py-1 text-left text-gray-600 dark:text-gray-400">Action</th>
-                                            <th className="px-2 py-1 text-right text-gray-600 dark:text-gray-400">Qty</th>
-                                            <th className="px-2 py-1 text-right text-gray-600 dark:text-gray-400">Price</th>
-                                            <th className="px-2 py-1 text-right text-gray-600 dark:text-gray-400">Net</th>
-                                            <th className="px-2 py-1 text-left text-gray-600 dark:text-gray-400">Time</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                                          {leg.fills.map((fill, fillIndex) => (
-                                            <tr key={fillIndex} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                              <td className="px-2 py-1">
-                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-                                                  fill.action.startsWith('B')
-                                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                                                    : 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300'
-                                                }`}>
-                                                  {fill.action}
-                                                </span>
-                                              </td>
-                                              <td className="px-2 py-1 text-right text-gray-700 dark:text-gray-300">
-                                                {fill.quantity}
-                                              </td>
-                                              <td className="px-2 py-1 text-right text-gray-700 dark:text-gray-300">
-                                                {formatCurrency(fill.price)}
-                                              </td>
-                                              <td className="px-2 py-1 text-right text-gray-700 dark:text-gray-300">
-                                                {formatCurrency(fill.net_amount)}
-                                              </td>
-                                              <td className="px-2 py-1 text-gray-500 dark:text-gray-500 whitespace-nowrap">
-                                                {fill.execution_time.split(' ')[0]}
-                                              </td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Right: Accept button */}
-                          <div className="flex-shrink-0">
-                            <button
-                              onClick={() => handleAcceptGroup(group, index)}
-                              disabled={acceptingGroup === index}
-                              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-                            >
-                              {acceptingGroup === index ? (
-                                <>
-                                  <RefreshCw className="h-4 w-4 animate-spin" />
-                                  Creating...
-                                </>
-                              ) : (
-                                <>
-                                  <Check className="h-4 w-4" />
-                                  Accept
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Pagination Controls (when enabled) */}
         {usePagination && (
@@ -1187,7 +1017,7 @@ export default function TransactionsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 text-right">
-                        <span className="font-medium">{group.totalQuantity}</span>
+                        <span className="font-medium">{formatQuantity(group.totalQuantity)}</span>
                         {group.executions.length > 1 && (
                           <span className="ml-1 text-xs text-gray-600 dark:text-gray-400">
                             ({group.executions.length} fills)
@@ -1288,7 +1118,7 @@ export default function TransactionsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 text-right">
-                        {exec.quantity}
+                        {formatQuantity(exec.quantity)}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 text-right">
                         {exec.strike ? `$${exec.strike}` : '-'}
@@ -1375,14 +1205,6 @@ export default function TransactionsPage() {
           executions={selectedExecutions}
           onClose={() => setShowCreateModal(false)}
           onCreated={handleTradeCreated}
-        />
-      )}
-
-      {/* Suggest Grouping Modal */}
-      {showSuggestModal && (
-        <SuggestGroupingModal
-          onClose={() => setShowSuggestModal(false)}
-          onApply={handleTradeCreated}
         />
       )}
     </div>

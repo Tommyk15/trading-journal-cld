@@ -406,3 +406,57 @@ class PolygonService:
         """
         status = await self.check_api_status()
         return status.get("options", False)
+
+    async def get_stock_candles(
+        self,
+        symbol: str,
+        start_date: datetime,
+        end_date: datetime,
+        timespan: str = "day",
+        multiplier: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Fetch OHLC candle data for a stock.
+
+        Args:
+            symbol: Stock ticker symbol (e.g., "SPY")
+            start_date: Start date for candles
+            end_date: End date for candles
+            timespan: Candle timespan ("minute", "hour", "day", "week", "month")
+            multiplier: Timespan multiplier (e.g., 5 for 5-minute candles)
+
+        Returns:
+            List of candle dictionaries with timestamp, open, high, low, close, volume
+        """
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+
+        endpoint = f"/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{start_str}/{end_str}"
+
+        try:
+            data = await self._request(
+                "GET",
+                endpoint,
+                params={"adjusted": "true", "sort": "desc", "limit": 5000},
+            )
+        except PolygonAPIError as e:
+            logger.error(f"Failed to fetch candles for {symbol}: {e}")
+            return []
+
+        if not data or "results" not in data:
+            logger.warning(f"No candle data found for {symbol}")
+            return []
+
+        candles = []
+        for bar in data["results"]:
+            candles.append({
+                "timestamp": datetime.fromtimestamp(bar["t"] / 1000),
+                "open": Decimal(str(bar["o"])),
+                "high": Decimal(str(bar["h"])),
+                "low": Decimal(str(bar["l"])),
+                "close": Decimal(str(bar["c"])),
+                "volume": bar.get("v"),
+            })
+
+        # Reverse to chronological order (API returns desc for most recent data first)
+        candles.reverse()
+        return candles

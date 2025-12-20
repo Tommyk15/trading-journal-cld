@@ -2,7 +2,7 @@
 
 import csv
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from io import StringIO
 from typing import Any
@@ -98,12 +98,18 @@ class FlexQueryParser:
             Execution dictionary
         """
         try:
-            # Parse datetime
+            # Parse datetime - format is YYYYMMDD;HHMMSS or YYYYMMDD;HHMMSS;TZ
             dt_str = trade.get('dateTime', '')
-            if ';' in dt_str:
-                dt_str = dt_str.split(';')[0]  # Remove timezone
-
-            execution_time = datetime.strptime(dt_str, '%Y%m%d;%H%M%S') if dt_str else None
+            execution_time = None
+            if dt_str:
+                parts = dt_str.split(';')
+                if len(parts) >= 2:
+                    # Has date and time (possibly with timezone suffix to ignore)
+                    dt_clean = f"{parts[0]};{parts[1]}"
+                    execution_time = datetime.strptime(dt_clean, '%Y%m%d;%H%M%S').replace(tzinfo=UTC)
+                elif len(parts) == 1:
+                    # Just date
+                    execution_time = datetime.strptime(parts[0], '%Y%m%d').replace(tzinfo=UTC)
 
             # Parse IDs
             try:
@@ -128,7 +134,7 @@ class FlexQueryParser:
                 'currency': trade.get('currency', 'USD'),
                 'side': 'BOT' if trade.get('buySell') == 'BUY' else 'SLD',
                 'open_close_indicator': trade.get('openCloseIndicator', None),
-                'quantity': abs(int(float(trade.get('quantity', 0)))),
+                'quantity': abs(Decimal(str(trade.get('quantity', 0)))),
                 'price': Decimal(str(trade.get('tradePrice', 0))),
                 'commission': abs(Decimal(str(trade.get('ibCommission', 0)))),
                 'net_amount': Decimal(str(trade.get('netCash', 0))),
@@ -141,7 +147,7 @@ class FlexQueryParser:
                 execution.update({
                     'option_type': trade.get('putCall', ''),
                     'strike': Decimal(str(trade.get('strike', 0))),
-                    'expiration': datetime.strptime(expiry_str, '%Y%m%d') if expiry_str else None,
+                    'expiration': datetime.strptime(expiry_str, '%Y%m%d').replace(tzinfo=UTC) if expiry_str else None,
                     'multiplier': int(float(trade.get('multiplier', 100))),
                 })
             else:
@@ -176,7 +182,7 @@ class FlexQueryParser:
             execution_time = None
             for fmt in ['%Y%m%d;%H%M%S', '%Y-%m-%d, %H:%M:%S', '%Y-%m-%d %H:%M:%S']:
                 try:
-                    execution_time = datetime.strptime(dt_str, fmt)
+                    execution_time = datetime.strptime(dt_str, fmt).replace(tzinfo=UTC)
                     break
                 except ValueError:
                     continue
@@ -226,7 +232,7 @@ class FlexQueryParser:
                 'currency': row.get('Currency', 'USD'),  # Default to USD if not provided
                 'side': side,
                 'open_close_indicator': row.get('Open/CloseIndicator', row.get('OpenCloseIndicator', None)),
-                'quantity': abs(int(float(row.get('Quantity', 0)))),
+                'quantity': abs(Decimal(str(row.get('Quantity', 0)))),
                 'price': Decimal(str(row.get('TradePrice', row.get('T. Price', row.get('Trade Price', 0))))),
                 'commission': abs(Decimal(str(row.get('IBCommission', row.get('Comm/Fee', row.get('ibCommission', 0)))))),
                 'net_amount': Decimal(str(row.get('Proceeds', row.get('netCash', 0)))),
@@ -242,7 +248,7 @@ class FlexQueryParser:
                 if expiry_str:
                     for fmt in ['%Y%m%d', '%Y-%m-%d']:
                         try:
-                            expiration = datetime.strptime(expiry_str, fmt)
+                            expiration = datetime.strptime(expiry_str, fmt).replace(tzinfo=UTC)
                             break
                         except ValueError:
                             continue

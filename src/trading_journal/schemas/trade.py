@@ -2,8 +2,22 @@
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    pass
+
+
+class TagInTrade(BaseModel):
+    """Embedded tag schema for trade response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    color: str
 
 
 class TradeBase(BaseModel):
@@ -62,6 +76,32 @@ class TradeResponse(TradeBase):
     assigned_from_trade_id: int | None = Field(None, description="Option trade that was assigned")
     created_at: datetime = Field(..., description="Record creation timestamp")
     updated_at: datetime = Field(..., description="Record update timestamp")
+
+    # Trade Open Snapshot (Greeks & IV at entry)
+    underlying_price_open: Decimal | None = Field(None, description="Underlying price at open")
+    iv_open: Decimal | None = Field(None, description="IV at open (decimal, e.g. 0.35 for 35%)")
+    iv_percentile_52w_open: Decimal | None = Field(None, description="IV percentile (52 week)")
+    iv_rank_52w_open: Decimal | None = Field(None, description="IV rank (52 week)")
+    delta_open: Decimal | None = Field(None, description="Net delta at open")
+    gamma_open: Decimal | None = Field(None, description="Net gamma at open")
+    theta_open: Decimal | None = Field(None, description="Net theta at open")
+    vega_open: Decimal | None = Field(None, description="Net vega at open")
+    pop_open: Decimal | None = Field(None, description="Probability of profit at open")
+    max_profit: Decimal | None = Field(None, description="Maximum potential profit")
+    max_risk: Decimal | None = Field(None, description="Maximum potential risk")
+
+    # Trade Close Snapshot
+    underlying_price_close: Decimal | None = Field(None, description="Underlying price at close")
+    iv_close: Decimal | None = Field(None, description="IV at close")
+    delta_close: Decimal | None = Field(None, description="Net delta at close")
+    pnl_percent: Decimal | None = Field(None, description="P&L as % of max profit")
+
+    # Greeks metadata
+    greeks_source: str | None = Field(None, description="Data source (IBKR, POLYGON, etc)")
+    greeks_pending: bool = Field(False, description="Whether Greeks fetch is pending")
+
+    # Tags (many-to-many relationship)
+    tag_list: list[TagInTrade] = Field(default_factory=list, description="Tags assigned to this trade")
 
 
 class TradeList(BaseModel):

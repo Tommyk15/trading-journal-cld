@@ -1,7 +1,7 @@
 """IBKR service for fetching executions and Greeks data."""
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from ib_insync import IB, Fill
@@ -142,13 +142,13 @@ class IBKRService:
                 "perm_id": execution.permId,
                 "execution_time": datetime.strptime(
                     execution.time, "%Y%m%d %H:%M:%S"
-                ),
+                ).replace(tzinfo=UTC),
                 "underlying": contract.symbol,
                 "security_type": contract.secType,
                 "exchange": execution.exchange,
                 "currency": contract.currency or "USD",
                 "side": execution.side,
-                "quantity": int(execution.shares),
+                "quantity": Decimal(str(execution.shares)),
                 "price": Decimal(str(execution.price)),
                 "account_id": execution.acctNumber,
             }
@@ -161,7 +161,7 @@ class IBKRService:
                         "strike": Decimal(str(contract.strike)),
                         "expiration": datetime.strptime(
                             contract.lastTradeDateOrContractMonth, "%Y%m%d"
-                        ),
+                        ).replace(tzinfo=UTC),
                         "multiplier": int(contract.multiplier or 100),
                     }
                 )
