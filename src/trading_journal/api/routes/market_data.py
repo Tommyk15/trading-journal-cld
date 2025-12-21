@@ -374,6 +374,44 @@ async def get_positions_market_data(
     all_fresh = True
     any_data = False
 
+    # Fetch stock quotes for all unique underlyings (for underlying_price column)
+    import asyncio
+    unique_underlyings = set(t.underlying for t in trades)
+    underlying_prices: dict[str, float | None] = {}
+
+    if ibkr_connected:
+        # First, get prices from existing stock positions
+        underlyings_to_fetch = []
+        for underlying in unique_underlyings:
+            stock_key = f"{underlying}_STK"
+            if stock_key in ibkr_by_key:
+                underlying_prices[underlying] = ibkr_by_key[stock_key].get("market_price")
+            else:
+                underlyings_to_fetch.append(underlying)
+
+        # Fetch remaining quotes concurrently from IBKR
+        async def fetch_quote(symbol: str) -> tuple[str, float | None]:
+            try:
+                quote = await asyncio.wait_for(
+                    service.get_stock_quote(symbol),
+                    timeout=5.0  # 5 second timeout per quote
+                )
+                if quote and quote.price:
+                    return (symbol, float(quote.price))
+            except Exception:
+                pass
+            return (symbol, None)
+
+        if underlyings_to_fetch:
+            results = await asyncio.gather(
+                *[fetch_quote(sym) for sym in underlyings_to_fetch],
+                return_exceptions=True
+            )
+            for result in results:
+                if isinstance(result, tuple):
+                    symbol, price = result
+                    underlying_prices[symbol] = price
+
     # Pre-fetch all executions with proper date casting to avoid timezone issues
     from sqlalchemy import func, cast, Date
     all_trade_ids = [t.id for t in trades]
@@ -509,11 +547,8 @@ async def get_positions_market_data(
         if all_legs_matched and cost_basis != 0:
             unrealized_pnl_percent = float((trade_unrealized_pnl) / abs(cost_basis) * 100)
 
-        # Get underlying price
-        underlying_price = None
-        stock_key = f"{trade.underlying}_STK"
-        if stock_key in ibkr_by_key:
-            underlying_price = ibkr_by_key[stock_key].get("market_price")
+        # Get underlying price from pre-fetched quotes
+        underlying_price = underlying_prices.get(trade.underlying)
 
         positions_data.append(PositionMarketDataResponse(
             trade_id=trade.id,
