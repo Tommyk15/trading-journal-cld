@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # FRED API Configuration
     fred_api_key: str | None = Field(default=None)
 
+    # Execution Sync Scheduler
+    enable_execution_sync: bool = Field(default=False, description="Enable automatic execution sync")
+    execution_sync_interval_minutes: int = Field(default=1, description="Sync interval in minutes")
+    execution_sync_fetch_greeks: bool = Field(default=True, description="Auto-fetch Greeks for new trades")
+    flex_query_daily_hour: int = Field(default=0, description="Hour for daily Flex Query sync (0-23)")
+    flex_query_daily_minute: int = Field(default=5, description="Minute for daily Flex Query sync (0-59)")
+
 
 @lru_cache
 def get_settings() -> Settings:

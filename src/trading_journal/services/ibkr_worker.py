@@ -31,6 +31,7 @@ class RequestType(Enum):
     OPTION_DATA = "option_data"
     PORTFOLIO = "portfolio"
     ACCOUNT_PNL = "account_pnl"
+    FETCH_EXECUTIONS = "fetch_executions"
     SHUTDOWN = "shutdown"
     PING = "ping"
 
@@ -294,6 +295,100 @@ class IBKRWorker:
             logger.error(f"Error getting account P&L: {e}")
             return None
 
+    async def fetch_executions(self) -> list[dict]:
+        """Fetch executions from IBKR."""
+        if not self.connected or not self.ib:
+            return []
+
+        try:
+            fills = await self.ib.reqExecutionsAsync()
+            executions = []
+
+            for fill in fills:
+                exec_dict = self._parse_fill(fill)
+                if exec_dict:
+                    executions.append(exec_dict)
+
+            return executions
+
+        except Exception as e:
+            logger.error(f"Error fetching executions: {e}")
+            return []
+
+    def _parse_fill(self, fill) -> dict | None:
+        """Parse IBKR Fill object into dict.
+
+        Args:
+            fill: IBKR Fill object
+
+        Returns:
+            Execution dictionary or None if invalid
+        """
+        try:
+            execution = fill.execution
+            contract = fill.contract
+            commission_report = fill.commissionReport
+
+            # Parse execution time
+            exec_time = datetime.strptime(execution.time, "%Y%m%d %H:%M:%S")
+
+            # Base execution data
+            exec_data = {
+                "exec_id": execution.execId,
+                "order_id": execution.orderId,
+                "perm_id": execution.permId,
+                "execution_time": exec_time.isoformat(),
+                "underlying": contract.symbol,
+                "security_type": contract.secType,
+                "exchange": execution.exchange,
+                "currency": contract.currency or "USD",
+                "side": execution.side,
+                "quantity": float(execution.shares),
+                "price": float(execution.price),
+                "account_id": execution.acctNumber,
+            }
+
+            # Option-specific fields
+            if contract.secType == "OPT":
+                exp_date = datetime.strptime(
+                    contract.lastTradeDateOrContractMonth, "%Y%m%d"
+                )
+                exec_data.update({
+                    "option_type": contract.right,  # C or P
+                    "strike": float(contract.strike),
+                    "expiration": exp_date.isoformat(),
+                    "multiplier": int(contract.multiplier or 100),
+                })
+            else:
+                exec_data.update({
+                    "option_type": None,
+                    "strike": None,
+                    "expiration": None,
+                    "multiplier": None,
+                })
+
+            # Commission data
+            if commission_report:
+                exec_data["commission"] = float(commission_report.commission)
+            else:
+                exec_data["commission"] = 0.0
+
+            # Calculate net amount (price * quantity * multiplier)
+            multiplier = exec_data.get("multiplier") or 1
+            net_amount = exec_data["price"] * exec_data["quantity"] * multiplier
+
+            # Adjust for buy vs sell
+            if exec_data["side"] == "BOT":
+                net_amount = -net_amount  # Money out for buys
+
+            exec_data["net_amount"] = net_amount
+
+            return exec_data
+
+        except Exception as e:
+            logger.error(f"Error parsing fill: {e}")
+            return None
+
     async def handle_request(self, request: WorkerRequest) -> WorkerResponse:
         """Handle a request from the main process."""
         try:
@@ -358,6 +453,14 @@ class IBKRWorker:
                     success=data is not None,
                     data=data,
                     error="No data available" if data is None else None,
+                )
+
+            elif request.request_type == RequestType.FETCH_EXECUTIONS:
+                data = await self.fetch_executions()
+                return WorkerResponse(
+                    request_id=request.request_id,
+                    success=True,
+                    data=data,
                 )
 
             elif request.request_type == RequestType.SHUTDOWN:
@@ -601,3 +704,12 @@ class IBKRWorkerClient:
         """Get account P&L via worker."""
         response = self._send_request(RequestType.ACCOUNT_PNL, {}, timeout=10)
         return response.data if response and response.success else None
+
+    def fetch_executions(self) -> list[dict]:
+        """Fetch executions via worker.
+
+        Returns:
+            List of execution dictionaries from IBKR (same-day only due to API limits)
+        """
+        response = self._send_request(RequestType.FETCH_EXECUTIONS, {}, timeout=30)
+        return response.data if response and response.success else []

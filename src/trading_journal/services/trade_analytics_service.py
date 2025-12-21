@@ -511,3 +511,482 @@ class TradeAnalyticsService:
             collateral_required=collateral,
             dte=dte,
         )
+
+    async def populate_all_trade_fields(
+        self,
+        trade,  # Trade model
+        session,  # AsyncSession
+    ) -> bool:
+        """Populate ALL trade fields with Greeks and analytics.
+
+        Fetches Greeks from IBKR (primary) or Polygon (fallback), then
+        calculates and stores all analytics fields on the trade.
+
+        Args:
+            trade: Trade model to populate
+            session: Database session
+
+        Returns:
+            True if successful, False if critical fields missing
+        """
+        from sqlalchemy import select
+        from trading_journal.models.execution import Execution
+
+        # Get executions for this trade
+        stmt = select(Execution).where(Execution.trade_id == trade.id)
+        result = await session.execute(stmt)
+        executions = list(result.scalars().all())
+
+        if not executions:
+            logger.warning(f"No executions found for trade {trade.id}")
+            return False
+
+        # Build legs from executions
+        legs = self._build_legs_from_executions(executions)
+
+        if not legs:
+            logger.warning(f"No option legs found for trade {trade.id}")
+            return False
+
+        # 1. Fetch Greeks from IBKR (primary) or Polygon (fallback)
+        greeks_source, legs_with_greeks, underlying_price = await self._fetch_greeks_multi_source(
+            trade, legs
+        )
+
+        if not legs_with_greeks:
+            logger.warning(f"Could not fetch Greeks for trade {trade.id}")
+            trade.greeks_pending = True
+            return False
+
+        # 2. Calculate net Greeks
+        net_greeks = self.calculate_net_greeks(legs_with_greeks, multiplier=1)
+        trade.delta_open = net_greeks["net_delta"]
+        trade.gamma_open = net_greeks["net_gamma"]
+        trade.theta_open = net_greeks["net_theta"]
+        trade.vega_open = net_greeks["net_vega"]
+
+        # 3. Get trade-level IV
+        trade.iv_open = self.get_trade_iv(legs_with_greeks, trade.strategy_type or "")
+        trade.underlying_price_open = underlying_price
+        trade.greeks_source = greeks_source
+
+        # 4. Calculate net premium from executions
+        net_premium = self._calculate_net_premium(executions)
+
+        # 5. Calculate max profit/risk
+        max_profit, max_risk = self.calculate_max_profit_risk(
+            legs_with_greeks,
+            trade.strategy_type or "",
+            net_premium,
+            multiplier=1,  # Per contract
+        )
+        trade.max_profit = max_profit
+        trade.max_risk = max_risk
+
+        # 6. Calculate PoP
+        dte = self.calculate_dte(legs_with_greeks)
+        if trade.iv_open and underlying_price and dte and dte > 0:
+            breakevens = self.calculate_breakevens(
+                legs_with_greeks, trade.strategy_type or "", net_premium
+            )
+            if breakevens:
+                is_credit = net_premium > 0
+                pop = self.calculate_pop_black_scholes(
+                    underlying_price,
+                    breakevens[0],
+                    trade.iv_open,
+                    dte,
+                    is_credit,
+                )
+                trade.pop_open = pop
+
+        # 7. Calculate collateral
+        trade.collateral_calculated = self._calculate_collateral(
+            trade.strategy_type or "",
+            legs_with_greeks,
+        )
+
+        # Mark Greeks as fetched
+        trade.greeks_pending = False
+
+        await session.flush()
+        logger.info(f"Populated all fields for trade {trade.id} (source: {greeks_source})")
+        return True
+
+    async def populate_analytics_only(
+        self,
+        trade,  # Trade model
+        session,  # AsyncSession
+    ) -> bool:
+        """Populate only analytics fields for a trade that already has Greeks.
+
+        Use this when Greeks are already fetched but analytics fields
+        (max_profit, max_risk, pop_open) are missing.
+
+        Args:
+            trade: Trade model with Greeks already populated
+            session: Database session
+
+        Returns:
+            True if successful
+        """
+        from sqlalchemy import select
+        from trading_journal.models.execution import Execution
+
+        if trade.delta_open is None:
+            logger.warning(f"Trade {trade.id} has no Greeks, skipping analytics")
+            return False
+
+        # Get executions for this trade
+        stmt = select(Execution).where(Execution.trade_id == trade.id)
+        result = await session.execute(stmt)
+        executions = list(result.scalars().all())
+
+        if not executions:
+            return False
+
+        # Build legs from executions (without Greeks, just for structure)
+        legs = self._build_legs_from_executions(executions)
+
+        if not legs:
+            return False
+
+        # Calculate net premium
+        net_premium = self._calculate_net_premium(executions)
+
+        # Calculate max profit/risk
+        max_profit, max_risk = self.calculate_max_profit_risk(
+            legs,
+            trade.strategy_type or "",
+            net_premium,
+            multiplier=1,
+        )
+        trade.max_profit = max_profit
+        trade.max_risk = max_risk
+
+        # Calculate PoP if we have IV
+        dte = self.calculate_dte(legs)
+        if trade.iv_open and trade.underlying_price_open and dte and dte > 0:
+            breakevens = self.calculate_breakevens(
+                legs, trade.strategy_type or "", net_premium
+            )
+            if breakevens:
+                is_credit = net_premium > 0
+                pop = self.calculate_pop_black_scholes(
+                    trade.underlying_price_open,
+                    breakevens[0],
+                    trade.iv_open,
+                    dte,
+                    is_credit,
+                )
+                trade.pop_open = pop
+
+        # Calculate collateral
+        trade.collateral_calculated = self._calculate_collateral(
+            trade.strategy_type or "",
+            legs,
+        )
+
+        await session.flush()
+        return True
+
+    async def _fetch_greeks_multi_source(
+        self,
+        trade,
+        legs: list[LegData],
+    ) -> tuple[str | None, list[LegData] | None, Decimal | None]:
+        """Fetch Greeks from IBKR (primary) or Polygon (fallback).
+
+        Args:
+            trade: Trade model
+            legs: List of leg data without Greeks
+
+        Returns:
+            Tuple of (source, legs_with_greeks, underlying_price)
+        """
+        # Try IBKR first
+        result = await self._fetch_greeks_ibkr(trade, legs)
+        if result[1]:  # legs_with_greeks is not None
+            return ("IBKR", result[1], result[2])
+
+        # Fallback to Polygon
+        result = await self._fetch_greeks_polygon(trade, legs)
+        if result[1]:
+            return ("POLYGON", result[1], result[2])
+
+        return (None, None, None)
+
+    async def _fetch_greeks_ibkr(
+        self,
+        trade,
+        legs: list[LegData],
+    ) -> tuple[str, list[LegData] | None, Decimal | None]:
+        """Fetch Greeks from IBKR via worker.
+
+        Args:
+            trade: Trade model
+            legs: List of leg data
+
+        Returns:
+            Tuple of (source, legs_with_greeks, underlying_price)
+        """
+        try:
+            from trading_journal.services.market_data_service import MarketDataService
+
+            market_data = MarketDataService()
+            worker = market_data._get_ibkr_worker()
+
+            if not worker or not worker.is_running():
+                logger.debug("IBKR worker not running")
+                return ("IBKR", None, None)
+
+            # Get underlying price
+            stock_quote = worker.get_stock_quote(trade.underlying)
+            if not stock_quote or not stock_quote.get("price"):
+                logger.debug(f"Could not get stock quote for {trade.underlying}")
+                return ("IBKR", None, None)
+
+            underlying_price = Decimal(str(stock_quote["price"]))
+
+            # Fetch Greeks for each leg
+            legs_with_greeks = []
+            for leg in legs:
+                exp_str = leg.expiration.strftime("%Y%m%d") if leg.expiration else ""
+                option_data = worker.get_option_data(
+                    underlying=trade.underlying,
+                    expiration=exp_str,
+                    strike=float(leg.strike),
+                    option_type=leg.option_type,
+                )
+
+                if not option_data or not option_data.get("greeks"):
+                    logger.debug(f"Could not get Greeks for {trade.underlying} {exp_str} {leg.strike} {leg.option_type}")
+                    return ("IBKR", None, None)
+
+                greeks = option_data["greeks"]
+                leg_with_greeks = LegData(
+                    option_type=leg.option_type,
+                    strike=leg.strike,
+                    expiration=leg.expiration,
+                    quantity=leg.quantity,
+                    delta=Decimal(str(greeks["delta"])) if greeks.get("delta") else None,
+                    gamma=Decimal(str(greeks["gamma"])) if greeks.get("gamma") else None,
+                    theta=Decimal(str(greeks["theta"])) if greeks.get("theta") else None,
+                    vega=Decimal(str(greeks["vega"])) if greeks.get("vega") else None,
+                    iv=Decimal(str(greeks["iv"])) if greeks.get("iv") else None,
+                    premium=leg.premium,
+                )
+                legs_with_greeks.append(leg_with_greeks)
+
+            return ("IBKR", legs_with_greeks, underlying_price)
+
+        except Exception as e:
+            logger.error(f"Error fetching Greeks from IBKR: {e}")
+            return ("IBKR", None, None)
+
+    async def _fetch_greeks_polygon(
+        self,
+        trade,
+        legs: list[LegData],
+    ) -> tuple[str, list[LegData] | None, Decimal | None]:
+        """Fetch Greeks from Polygon.
+
+        Args:
+            trade: Trade model
+            legs: List of leg data
+
+        Returns:
+            Tuple of (source, legs_with_greeks, underlying_price)
+        """
+        try:
+            from trading_journal.services.polygon_service import PolygonService
+
+            async with PolygonService() as polygon:
+                # Get underlying price
+                underlying_price_data = await polygon.get_underlying_price(trade.underlying)
+                if not underlying_price_data:
+                    logger.debug(f"Could not get underlying price for {trade.underlying}")
+                    return ("POLYGON", None, None)
+
+                underlying_price = underlying_price_data
+
+                # Fetch Greeks for each leg
+                legs_with_greeks = []
+                for leg in legs:
+                    greeks_data = await polygon.get_option_greeks(
+                        underlying=trade.underlying,
+                        expiration=leg.expiration,
+                        strike=leg.strike,
+                        option_type=leg.option_type,
+                    )
+
+                    if not greeks_data:
+                        logger.debug(f"Could not get Polygon Greeks for {trade.underlying} {leg.strike} {leg.option_type}")
+                        return ("POLYGON", None, None)
+
+                    leg_with_greeks = LegData(
+                        option_type=leg.option_type,
+                        strike=leg.strike,
+                        expiration=leg.expiration,
+                        quantity=leg.quantity,
+                        delta=greeks_data.get("delta"),
+                        gamma=greeks_data.get("gamma"),
+                        theta=greeks_data.get("theta"),
+                        vega=greeks_data.get("vega"),
+                        iv=greeks_data.get("iv"),
+                        premium=leg.premium,
+                    )
+                    legs_with_greeks.append(leg_with_greeks)
+
+                return ("POLYGON", legs_with_greeks, underlying_price)
+
+        except Exception as e:
+            logger.error(f"Error fetching Greeks from Polygon: {e}")
+            return ("POLYGON", None, None)
+
+    def _build_legs_from_executions(self, executions: list) -> list[LegData]:
+        """Build leg data from executions.
+
+        For OPEN trades: uses net position from all executions
+        For CLOSED trades: uses opening transactions only
+
+        Args:
+            executions: List of Execution models
+
+        Returns:
+            List of LegData objects
+        """
+        # Group by unique option contract
+        contracts = {}
+
+        for exec in executions:
+            if exec.security_type != "OPT":
+                continue
+
+            # Create unique key for contract
+            key = (
+                exec.option_type,
+                exec.strike,
+                exec.expiration,
+            )
+
+            if key not in contracts:
+                contracts[key] = {
+                    "option_type": exec.option_type,
+                    "strike": exec.strike,
+                    "expiration": exec.expiration,
+                    "quantity": 0,
+                    "premium": Decimal("0"),
+                }
+
+            # Calculate signed quantity
+            qty = exec.quantity
+            if exec.side == "SLD":
+                qty = -qty  # Short position
+
+            # For opening transactions
+            if exec.open_close_indicator == "O":
+                contracts[key]["quantity"] += int(qty)
+                contracts[key]["premium"] += exec.net_amount
+
+        # Build LegData objects for non-zero positions
+        legs = []
+        for contract_data in contracts.values():
+            if contract_data["quantity"] != 0:
+                legs.append(LegData(
+                    option_type=contract_data["option_type"],
+                    strike=contract_data["strike"],
+                    expiration=contract_data["expiration"],
+                    quantity=contract_data["quantity"],
+                    premium=contract_data["premium"],
+                ))
+
+        return legs
+
+    def _calculate_net_premium(self, executions: list) -> Decimal:
+        """Calculate net premium from executions.
+
+        Positive = credit received
+        Negative = debit paid
+
+        Args:
+            executions: List of Execution models
+
+        Returns:
+            Net premium per contract
+        """
+        total_premium = Decimal("0")
+        total_contracts = 0
+
+        for exec in executions:
+            if exec.security_type != "OPT":
+                continue
+
+            # Only count opening transactions for premium
+            if exec.open_close_indicator == "O":
+                # net_amount is already signed (negative for buys, positive for sells)
+                multiplier = exec.multiplier or 100
+                premium_per_contract = exec.price
+                if exec.side == "SLD":
+                    total_premium += premium_per_contract
+                else:
+                    total_premium -= premium_per_contract
+                total_contracts += 1
+
+        # Average per contract if multiple legs
+        if total_contracts > 0:
+            return total_premium / total_contracts
+
+        return total_premium
+
+    def _calculate_collateral(
+        self,
+        strategy_type: str,
+        legs: list[LegData],
+    ) -> Decimal | None:
+        """Calculate collateral requirement for strategy.
+
+        Args:
+            strategy_type: Type of strategy
+            legs: List of leg data
+
+        Returns:
+            Collateral requirement or None if undefined
+        """
+        if not legs:
+            return None
+
+        strikes = sorted({leg.strike for leg in legs})
+
+        if "Vertical" in strategy_type or "Spread" in strategy_type:
+            # Vertical spread: max risk = strike width
+            if len(strikes) >= 2:
+                width = strikes[-1] - strikes[0]
+                return width * 100  # Per contract
+            return None
+
+        elif "Iron Condor" in strategy_type:
+            # Iron Condor: wider of the two spreads
+            call_legs = [leg for leg in legs if leg.option_type == "C"]
+            put_legs = [leg for leg in legs if leg.option_type == "P"]
+
+            call_strikes = sorted({leg.strike for leg in call_legs})
+            put_strikes = sorted({leg.strike for leg in put_legs})
+
+            call_width = call_strikes[-1] - call_strikes[0] if len(call_strikes) >= 2 else Decimal("0")
+            put_width = put_strikes[-1] - put_strikes[0] if len(put_strikes) >= 2 else Decimal("0")
+
+            return max(call_width, put_width) * 100
+
+        elif "Short Put" in strategy_type or "Cash Secured Put" in strategy_type:
+            # Cash-secured put: strike price
+            put_legs = [leg for leg in legs if leg.option_type == "P" and leg.quantity < 0]
+            if put_legs:
+                return put_legs[0].strike * 100
+            return None
+
+        elif "Naked" in strategy_type or "Short Call" in strategy_type:
+            # Undefined risk - broker determines margin
+            return None
+
+        return None

@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -314,3 +314,82 @@ async def get_execution(
         raise HTTPException(status_code=404, detail="Execution not found")
 
     return ExecutionResponse.model_validate(execution)
+
+
+# Scheduler monitoring endpoints
+
+@router.get("/sync/status")
+async def get_sync_status(request: Request):
+    """Get execution sync scheduler status.
+
+    Returns scheduler status including:
+    - enabled: Whether scheduler is running
+    - interval_minutes: Sync interval
+    - next_realtime_sync: Next scheduled real-time sync
+    - next_flex_sync: Next scheduled Flex Query sync
+    - last_sync: Last sync timestamp
+    - total_syncs: Total syncs performed
+    - consecutive_errors: Number of consecutive errors
+    - history: Recent sync history
+
+    Raises:
+        HTTPException: If scheduler is not running
+    """
+    if not hasattr(request.app.state, 'execution_scheduler'):
+        raise HTTPException(
+            status_code=503,
+            detail="Execution sync scheduler not running. Set ENABLE_EXECUTION_SYNC=true to enable."
+        )
+
+    scheduler = request.app.state.execution_scheduler
+    status = scheduler.get_status()
+
+    return status
+
+
+@router.post("/sync/trigger")
+async def trigger_manual_sync(
+    request: Request,
+    sync_type: str = Query(
+        default="realtime",
+        description="Type of sync: 'realtime' or 'flex_query'"
+    ),
+):
+    """Manually trigger an execution sync.
+
+    Args:
+        sync_type: Type of sync - 'realtime' (IBKR API) or 'flex_query' (Flex Query API)
+
+    Returns:
+        Sync statistics
+
+    Raises:
+        HTTPException: If scheduler is not running
+    """
+    if not hasattr(request.app.state, 'execution_scheduler'):
+        raise HTTPException(
+            status_code=503,
+            detail="Execution sync scheduler not running. Set ENABLE_EXECUTION_SYNC=true to enable."
+        )
+
+    if sync_type not in ["realtime", "flex_query"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid sync_type. Use 'realtime' or 'flex_query'."
+        )
+
+    scheduler = request.app.state.execution_scheduler
+    stats = await scheduler.trigger_sync(sync_type=sync_type)
+
+    return {
+        "message": f"{sync_type.replace('_', ' ').title()} sync triggered",
+        "sync_type": stats.sync_type,
+        "started_at": stats.started_at.isoformat() if stats.started_at else None,
+        "completed_at": stats.completed_at.isoformat() if stats.completed_at else None,
+        "executions_fetched": stats.executions_fetched,
+        "executions_new": stats.executions_new,
+        "executions_existing": stats.executions_existing,
+        "trades_created": stats.trades_created,
+        "greeks_fetched": stats.greeks_fetched,
+        "error": stats.error_message,
+    }

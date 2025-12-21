@@ -579,7 +579,7 @@ class TradeGroupingService:
             "num_legs": len(legs),
             "num_executions": len(ledger.executions),
             "executions": ledger.executions,  # Include executions for trade_id assignment
-            "greeks_pending": False,  # Greeks auto-fetch disabled
+            "greeks_pending": True,  # Greeks will be fetched by scheduler
         }
 
     def _classify_strategy(self, legs: dict) -> str:
@@ -1427,7 +1427,7 @@ class TradeGroupingService:
             num_executions=len(executions),
             is_roll=group.roll_type == "ROLL" and not group.is_assignment,
             is_assignment=group.is_assignment,
-            greeks_pending=False,  # Greeks auto-fetch disabled
+            greeks_pending=True,  # Greeks will be fetched by scheduler
         )
 
         self.session.add(trade)

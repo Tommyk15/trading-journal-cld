@@ -13,3 +13,4 @@ python-dotenv>=1.0.0
 ib-insync>=0.9.86
 pandas>=2.1.0
 rich>=13.7.0
+apscheduler>=3.10.0

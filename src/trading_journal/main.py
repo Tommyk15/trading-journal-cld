@@ -32,8 +32,20 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     await init_db()
+
+    # Start execution sync scheduler if enabled
+    if settings.enable_execution_sync:
+        from trading_journal.services.execution_sync_scheduler import ExecutionSyncScheduler
+
+        scheduler = ExecutionSyncScheduler(settings=settings)
+        await scheduler.start()
+        app.state.execution_scheduler = scheduler
+
     yield
+
     # Shutdown
+    if hasattr(app.state, 'execution_scheduler'):
+        await app.state.execution_scheduler.stop()
     await close_db()
 
 
