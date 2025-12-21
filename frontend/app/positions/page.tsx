@@ -1173,7 +1173,7 @@ export default function PositionsPage() {
 
       <div className="p-6 space-y-6">
         {/* Summary Cards */}
-        <div className="grid gap-6 md:grid-cols-4">
+        <div className="grid gap-6 md:grid-cols-3 lg:grid-cols-5">
           <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
               <Layers className="h-5 w-5 text-blue-600" />
@@ -1200,6 +1200,19 @@ export default function PositionsPage() {
             </p>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {totalPortfolioCost < 0 ? 'Net credit received' : 'Net debit paid'}
+            </p>
+          </div>
+          <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-blue-600" />
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Net Unrealized P&L</h3>
+            </div>
+            {/* Placeholder until market data is integrated */}
+            <p className="mt-2 text-3xl font-bold text-gray-400 dark:text-gray-500">
+              -
+            </p>
+            <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
+              Awaiting market data
             </p>
           </div>
           <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
