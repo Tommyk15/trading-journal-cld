@@ -74,6 +74,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'strike', label: 'Strike', visible: true, width: 80, minWidth: 60, sortable: false, align: 'left' },
   { id: 'expiration', label: 'Expiration', visible: true, width: 100, minWidth: 80, sortable: false, align: 'left' },
   { id: 'dte', label: 'DTE', visible: true, width: 60, minWidth: 50, sortable: true, align: 'right' },
+  { id: 'underlying', label: 'Underlying', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
   { id: 'avgPrice', label: 'Avg Price', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
   { id: 'cost', label: 'Cost', visible: true, width: 110, minWidth: 80, sortable: true, align: 'right' },
   { id: 'marketValue', label: 'Market Value', visible: true, width: 110, minWidth: 80, sortable: false, align: 'right' },
@@ -960,6 +961,18 @@ export default function PositionsPage() {
                             {dte}
                           </span>
                         ) : '-';
+                      case 'underlying':
+                        if (marketDataLoading) {
+                          return <span className="text-gray-400 dark:text-gray-500 animate-pulse">...</span>;
+                        }
+                        const underlyingPrice = tradeMarketData?.underlying_price ?? null;
+                        return underlyingPrice !== null ? (
+                          <span className={isMarketDataStale ? 'text-gray-500 dark:text-gray-400' : 'font-medium'}>
+                            {formatCurrency(underlyingPrice)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">-</span>
+                        );
                       case 'avgPrice':
                         return formatCurrency(avgPrice);
                       case 'cost':
