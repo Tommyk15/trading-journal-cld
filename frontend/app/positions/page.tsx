@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Header, ActionButton } from '@/components/layout/Header';
-import { api } from '@/lib/api/client';
+import { api, PositionsMarketDataResponse, PositionMarketDataResponse } from '@/lib/api/client';
 import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
 import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box, ArrowUpDown, ArrowUp, ArrowDown, Search, X, Settings2, GripVertical, Eye, EyeOff } from 'lucide-react';
 
@@ -88,6 +88,11 @@ export default function PositionsPage() {
   const [tradeExecutions, setTradeExecutions] = useState<Record<number, TradeExecution[]>>({});
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [stockSplits, setStockSplits] = useState<Record<string, StockSplit[]>>({});
+
+  // Market data state
+  const [marketData, setMarketData] = useState<PositionsMarketDataResponse | null>(null);
+  const [marketDataLoading, setMarketDataLoading] = useState(false);
+  const [marketDataByTradeId, setMarketDataByTradeId] = useState<Record<number, PositionMarketDataResponse>>({});
 
   // Sorting and filtering state
   type SortColumn = 'date' | 'ticker' | 'qty' | 'strategy' | 'dte' | 'value' | null;
@@ -249,6 +254,25 @@ export default function PositionsPage() {
     }
   }
 
+  async function fetchMarketData(forceRefresh: boolean = false) {
+    try {
+      setMarketDataLoading(true);
+      const data = await api.marketData.getPositionsMarketData(forceRefresh);
+      setMarketData(data);
+
+      // Build lookup map by trade_id
+      const byTradeId: Record<number, PositionMarketDataResponse> = {};
+      for (const pos of data.positions) {
+        byTradeId[pos.trade_id] = pos;
+      }
+      setMarketDataByTradeId(byTradeId);
+    } catch (error) {
+      console.error('Error fetching market data:', error);
+    } finally {
+      setMarketDataLoading(false);
+    }
+  }
+
   async function fetchOpenTrades() {
     try {
       setLoading(true);
@@ -270,6 +294,9 @@ export default function PositionsPage() {
         })
       );
       setTradeExecutions(executionsMap);
+
+      // Fetch market data after trades are loaded
+      fetchMarketData();
     } catch (error) {
       console.error('Error fetching open trades:', error);
       setTrades([]);
@@ -877,14 +904,13 @@ export default function PositionsPage() {
                   // Cost = Avg Price * Qty (includes commission)
                   const cost = avgPrice * qty * priceMultiplier;
 
-                  // Market Value - placeholder for future market data integration
-                  const marketValue: number | null = null; // TODO: Fetch from market data API
-
-                  // Unrealized P&L = Market Value - Cost
-                  const unrealizedPnl = marketValue !== null ? marketValue - cost : null;
-                  const unrealizedPnlPercent = marketValue !== null && cost !== 0
-                    ? ((marketValue - cost) / Math.abs(cost)) * 100
-                    : null;
+                  // Get market data for this trade
+                  const tradeMarketData = marketDataByTradeId[trade.id];
+                  const marketValue = tradeMarketData?.total_market_value ?? null;
+                  const unrealizedPnl = tradeMarketData?.unrealized_pnl ?? null;
+                  const unrealizedPnlPercent = tradeMarketData?.unrealized_pnl_percent ?? null;
+                  const isMarketDataStale = tradeMarketData?.is_stale ?? false;
+                  const marketDataSource = tradeMarketData?.source ?? null;
 
                   // Helper to render cell content based on column id
                   const renderCellContent = (columnId: string) => {
@@ -943,11 +969,23 @@ export default function PositionsPage() {
                           </span>
                         );
                       case 'marketValue':
-                        return marketValue !== null ? formatCurrency(marketValue) : '-';
+                        if (marketDataLoading) {
+                          return <span className="text-gray-400 dark:text-gray-500 animate-pulse">...</span>;
+                        }
+                        return marketValue !== null ? (
+                          <span className={isMarketDataStale ? 'text-gray-500 dark:text-gray-400' : ''}>
+                            {formatCurrency(marketValue)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">-</span>
+                        );
                       case 'unrealizedPnl':
+                        if (marketDataLoading) {
+                          return <span className="text-gray-400 dark:text-gray-500 animate-pulse">...</span>;
+                        }
                         return unrealizedPnl !== null ? (
                           <div className="flex flex-col items-end">
-                            <span className={unrealizedPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                            <span className={`${unrealizedPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} ${isMarketDataStale ? 'opacity-60' : ''}`}>
                               {formatCurrency(unrealizedPnl)}
                             </span>
                             <span className={`text-xs ${unrealizedPnlPercent !== null && unrealizedPnlPercent >= 0 ? 'text-green-500 dark:text-green-500' : 'text-red-500 dark:text-red-500'}`}>
@@ -1162,12 +1200,20 @@ export default function PositionsPage() {
         title="Portfolio"
         subtitle="View and manage your open positions"
         actions={
-          <ActionButton
-            onClick={fetchOpenTrades}
-            icon={<RefreshCw className="h-4 w-4" />}
-            label="Refresh"
-            loading={loading}
-          />
+          <div className="flex items-center gap-2">
+            <ActionButton
+              onClick={() => fetchMarketData(true)}
+              icon={<BarChart3 className="h-4 w-4" />}
+              label="Refresh Prices"
+              loading={marketDataLoading}
+            />
+            <ActionButton
+              onClick={fetchOpenTrades}
+              icon={<RefreshCw className="h-4 w-4" />}
+              label="Refresh All"
+              loading={loading}
+            />
+          </div>
         }
       />
 
@@ -1204,16 +1250,47 @@ export default function PositionsPage() {
           </div>
           <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-blue-600" />
+              {marketData?.net_unrealized_pnl !== null && marketData?.net_unrealized_pnl !== undefined ? (
+                marketData.net_unrealized_pnl >= 0 ? (
+                  <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
+                ) : (
+                  <TrendingDown className="h-5 w-5 text-red-600 dark:text-red-400" />
+                )
+              ) : (
+                <BarChart3 className="h-5 w-5 text-blue-600" />
+              )}
               <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Net Unrealized P&L</h3>
             </div>
-            {/* Placeholder until market data is integrated */}
-            <p className="mt-2 text-3xl font-bold text-gray-400 dark:text-gray-500">
-              -
-            </p>
-            <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
-              Awaiting market data
-            </p>
+            {marketDataLoading ? (
+              <>
+                <p className="mt-2 text-3xl font-bold text-gray-400 dark:text-gray-500 animate-pulse">
+                  ...
+                </p>
+                <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
+                  Loading market data
+                </p>
+              </>
+            ) : marketData?.net_unrealized_pnl !== null && marketData?.net_unrealized_pnl !== undefined ? (
+              <>
+                <p className={`mt-2 text-3xl font-bold ${marketData.net_unrealized_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {formatCurrency(marketData.net_unrealized_pnl)}
+                </p>
+                <p className={`mt-1 text-sm ${marketData.net_unrealized_pnl_percent !== null && marketData.net_unrealized_pnl_percent >= 0 ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                  {marketData.net_unrealized_pnl_percent !== null
+                    ? `${marketData.net_unrealized_pnl_percent >= 0 ? '+' : ''}${marketData.net_unrealized_pnl_percent.toFixed(2)}%`
+                    : ''} · {marketData.source}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-3xl font-bold text-gray-400 dark:text-gray-500">
+                  -
+                </p>
+                <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
+                  {marketData?.ibkr_connected === false ? 'IBKR disconnected' : 'No market data'}
+                </p>
+              </>
+            )}
           </div>
           <div className="rounded-lg bg-white dark:bg-gray-800 p-6 shadow transition-colors">
             <div className="flex items-center gap-2">
