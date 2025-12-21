@@ -263,11 +263,14 @@ class MarketDataService:
 
         # Try IBKR first
         quote = await self._get_stock_quote_ibkr(symbol)
-        if quote.price is not None:
+        # Only use IBKR quote if we have real-time data (last or bid/ask)
+        # If we only have close price, it's stale (previous day's close)
+        has_realtime_data = quote.last is not None or (quote.bid is not None and quote.ask is not None)
+        if quote.price is not None and has_realtime_data:
             self._set_cache(cache_key, quote, DataSource.IBKR)
             return quote
 
-        # Fall back to Polygon
+        # Fall back to Polygon (also when IBKR only has stale close price)
         quote = await self._get_stock_quote_polygon(symbol)
         if quote.price is not None:
             self._set_cache(cache_key, quote, DataSource.POLYGON)

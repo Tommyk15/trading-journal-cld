@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from trading_journal.config import get_settings
 from trading_journal.core.database import get_db
 from trading_journal.models.execution import Execution
 from trading_journal.models.trade import Trade
@@ -379,38 +380,45 @@ async def get_positions_market_data(
     unique_underlyings = set(t.underlying for t in trades)
     underlying_prices: dict[str, float | None] = {}
 
-    if ibkr_connected:
-        # First, get prices from existing stock positions
-        underlyings_to_fetch = []
-        for underlying in unique_underlyings:
-            stock_key = f"{underlying}_STK"
-            if stock_key in ibkr_by_key:
-                underlying_prices[underlying] = ibkr_by_key[stock_key].get("market_price")
-            else:
-                underlyings_to_fetch.append(underlying)
+    # First, get prices from existing stock positions (if IBKR connected)
+    underlyings_to_fetch = []
+    for underlying in unique_underlyings:
+        stock_key = f"{underlying}_STK"
+        if ibkr_connected and stock_key in ibkr_by_key:
+            underlying_prices[underlying] = ibkr_by_key[stock_key].get("market_price")
+        else:
+            underlyings_to_fetch.append(underlying)
 
-        # Fetch remaining quotes concurrently from IBKR
-        async def fetch_quote(symbol: str) -> tuple[str, float | None]:
-            try:
-                quote = await asyncio.wait_for(
-                    service.get_stock_quote(symbol),
-                    timeout=5.0  # 5 second timeout per quote
+    # Fetch remaining quotes from Polygon (more reliable, especially after hours)
+    if underlyings_to_fetch:
+        try:
+            settings = get_settings()
+            polygon = PolygonService(settings.polygon_api_key)
+
+            async def fetch_underlying(symbol: str) -> tuple[str, float | None]:
+                try:
+                    result = await asyncio.wait_for(
+                        polygon.get_underlying_price(symbol),
+                        timeout=30.0  # Balance between speed and data availability
+                    )
+                    if result and result.price:
+                        return (symbol, float(result.price))
+                except Exception:
+                    pass
+                return (symbol, None)
+
+            async with polygon:
+                # Fetch concurrently (rate limiter will handle throttling)
+                results = await asyncio.gather(
+                    *[fetch_underlying(sym) for sym in underlyings_to_fetch],
+                    return_exceptions=True
                 )
-                if quote and quote.price:
-                    return (symbol, float(quote.price))
-            except Exception:
-                pass
-            return (symbol, None)
-
-        if underlyings_to_fetch:
-            results = await asyncio.gather(
-                *[fetch_quote(sym) for sym in underlyings_to_fetch],
-                return_exceptions=True
-            )
-            for result in results:
-                if isinstance(result, tuple):
-                    symbol, price = result
-                    underlying_prices[symbol] = price
+                for result in results:
+                    if isinstance(result, tuple):
+                        symbol, price = result
+                        underlying_prices[symbol] = price
+        except Exception:
+            pass
 
     # Pre-fetch all executions with proper date casting to avoid timezone issues
     from sqlalchemy import func, cast, Date
