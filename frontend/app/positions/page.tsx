@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Header, ActionButton } from '@/components/layout/Header';
 import { api } from '@/lib/api/client';
 import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
-import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box, ArrowUpDown, ArrowUp, ArrowDown, Search, X } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box, ArrowUpDown, ArrowUp, ArrowDown, Search, X, Settings2, GripVertical, Eye, EyeOff } from 'lucide-react';
 
 // Stock split type for adjustment calculations
 interface StockSplit {
@@ -54,6 +54,33 @@ type PositionCategory = 'stocks' | 'options' | 'combos';
 type PositionDirection = 'long' | 'short';
 type SubsectionKey = `${PositionCategory}_${PositionDirection}`;
 
+// Column configuration
+interface ColumnConfig {
+  id: string;
+  label: string;
+  visible: boolean;
+  width: number;
+  minWidth: number;
+  sortable: boolean;
+  align: 'left' | 'right';
+}
+
+const DEFAULT_COLUMNS: ColumnConfig[] = [
+  { id: 'expand', label: '', visible: true, width: 48, minWidth: 48, sortable: false, align: 'left' },
+  { id: 'date', label: 'Date', visible: true, width: 100, minWidth: 80, sortable: true, align: 'left' },
+  { id: 'ticker', label: 'Ticker', visible: true, width: 80, minWidth: 60, sortable: true, align: 'left' },
+  { id: 'qty', label: 'Qty', visible: true, width: 70, minWidth: 50, sortable: true, align: 'right' },
+  { id: 'strategy', label: 'Strategy', visible: true, width: 140, minWidth: 100, sortable: true, align: 'left' },
+  { id: 'strike', label: 'Strike', visible: true, width: 80, minWidth: 60, sortable: false, align: 'left' },
+  { id: 'expiration', label: 'Expiration', visible: true, width: 100, minWidth: 80, sortable: false, align: 'left' },
+  { id: 'dte', label: 'DTE', visible: true, width: 60, minWidth: 50, sortable: true, align: 'right' },
+  { id: 'avgPrice', label: 'Avg Price', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
+  { id: 'cost', label: 'Cost', visible: true, width: 110, minWidth: 80, sortable: true, align: 'right' },
+  { id: 'marketValue', label: 'Market Value', visible: true, width: 110, minWidth: 80, sortable: false, align: 'right' },
+  { id: 'unrealizedPnl', label: 'Unrealized P&L', visible: true, width: 120, minWidth: 100, sortable: false, align: 'right' },
+  { id: 'commission', label: 'Commission', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
+];
+
 export default function PositionsPage() {
   const [trades, setTrades] = useState<OpenTrade[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,12 +90,120 @@ export default function PositionsPage() {
   const [stockSplits, setStockSplits] = useState<Record<string, StockSplit[]>>({});
 
   // Sorting and filtering state
-  type SortColumn = 'date' | 'ticker' | 'qty' | 'strategy' | 'dte' | 'value' | 'commission' | null;
+  type SortColumn = 'date' | 'ticker' | 'qty' | 'strategy' | 'dte' | 'value' | null;
   type SortDirection = 'asc' | 'desc';
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filterTicker, setFilterTicker] = useState('');
   const [filterStrategy, setFilterStrategy] = useState('');
+
+  // Column configuration state
+  const [columns, setColumns] = useState<ColumnConfig[]>(() => {
+    // Try to load from localStorage
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('positionsColumnConfig');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    }
+    return DEFAULT_COLUMNS;
+  });
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
+  const [resizingColumn, setResizingColumn] = useState<string | null>(null);
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
+  const resizeStartX = useRef<number>(0);
+  const resizeStartWidth = useRef<number>(0);
+
+  // Save column config to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('positionsColumnConfig', JSON.stringify(columns));
+    }
+  }, [columns]);
+
+  // Column resize handlers
+  const handleResizeStart = useCallback((columnId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const column = columns.find(c => c.id === columnId);
+    if (column) {
+      setResizingColumn(columnId);
+      resizeStartX.current = e.clientX;
+      resizeStartWidth.current = column.width;
+    }
+  }, [columns]);
+
+  const handleResizeMove = useCallback((e: MouseEvent) => {
+    if (resizingColumn) {
+      const diff = e.clientX - resizeStartX.current;
+      const column = columns.find(c => c.id === resizingColumn);
+      if (column) {
+        const newWidth = Math.max(column.minWidth, resizeStartWidth.current + diff);
+        setColumns(cols => cols.map(c =>
+          c.id === resizingColumn ? { ...c, width: newWidth } : c
+        ));
+      }
+    }
+  }, [resizingColumn, columns]);
+
+  const handleResizeEnd = useCallback(() => {
+    setResizingColumn(null);
+  }, []);
+
+  useEffect(() => {
+    if (resizingColumn) {
+      document.addEventListener('mousemove', handleResizeMove);
+      document.addEventListener('mouseup', handleResizeEnd);
+      return () => {
+        document.removeEventListener('mousemove', handleResizeMove);
+        document.removeEventListener('mouseup', handleResizeEnd);
+      };
+    }
+  }, [resizingColumn, handleResizeMove, handleResizeEnd]);
+
+  // Column visibility toggle
+  const toggleColumnVisibility = (columnId: string) => {
+    setColumns(cols => cols.map(c =>
+      c.id === columnId ? { ...c, visible: !c.visible } : c
+    ));
+  };
+
+  // Column reorder via drag and drop
+  const handleDragStart = (columnId: string) => {
+    setDraggedColumn(columnId);
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetColumnId: string) => {
+    e.preventDefault();
+    if (draggedColumn && draggedColumn !== targetColumnId) {
+      setColumns(cols => {
+        const draggedIndex = cols.findIndex(c => c.id === draggedColumn);
+        const targetIndex = cols.findIndex(c => c.id === targetColumnId);
+        if (draggedIndex === -1 || targetIndex === -1) return cols;
+
+        const newCols = [...cols];
+        const [removed] = newCols.splice(draggedIndex, 1);
+        newCols.splice(targetIndex, 0, removed);
+        return newCols;
+      });
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedColumn(null);
+  };
+
+  // Reset columns to default
+  const resetColumns = () => {
+    setColumns(DEFAULT_COLUMNS);
+  };
+
+  // Get visible columns
+  const visibleColumns = columns.filter(c => c.visible);
 
   // Apply split adjustments to quantity based on execution date
   function applyQuantitySplitAdjustment(symbol: string, quantity: number, executionDate: string): number {
@@ -223,10 +358,19 @@ export default function PositionsPage() {
       ? Math.ceil((expiration.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
       : 9999; // Put no-expiration at end when sorting
 
-    const netValue = aggregated.reduce((sum, g) => sum + g.totalValue, 0);
     const totalComm = aggregated.reduce((sum, g) => sum + g.totalCommission, 0);
+    const priceMultiplier = isStockTrade ? 1 : 100;
 
-    return { qty, dte, netValue, totalComm };
+    // Cost includes commission (Avg Price * Qty)
+    const rawAvgPrice = rawQty > 0
+      ? (parseFloat(trade.opening_cost) + totalComm) / rawQty / priceMultiplier
+      : 0;
+    const avgPrice = isStockTrade
+      ? applyPriceSplitAdjustment(trade.underlying, rawAvgPrice, trade.opened_at)
+      : rawAvgPrice;
+    const cost = avgPrice * qty * priceMultiplier;
+
+    return { qty, dte, cost };
   }
 
   // Simple aggregation for sorting (without full display logic)
@@ -314,12 +458,8 @@ export default function PositionsPage() {
           bVal = getTradeDataForSort(b).dte;
           break;
         case 'value':
-          aVal = getTradeDataForSort(a).netValue;
-          bVal = getTradeDataForSort(b).netValue;
-          break;
-        case 'commission':
-          aVal = getTradeDataForSort(a).totalComm;
-          bVal = getTradeDataForSort(b).totalComm;
+          aVal = getTradeDataForSort(a).cost;
+          bVal = getTradeDataForSort(b).cost;
           break;
       }
 
@@ -628,20 +768,57 @@ export default function PositionsPage() {
         {/* Subsection Content */}
         {!isCollapsed && (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700" style={{ tableLayout: 'fixed' }}>
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr className="group">
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-12"></th>
-                  <SortableHeader column="date" label="Date" />
-                  <SortableHeader column="ticker" label="Ticker" />
-                  <SortableHeader column="qty" label="Qty" align="right" />
-                  <SortableHeader column="strategy" label="Strategy" />
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Strike</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Expiration</th>
-                  <SortableHeader column="dte" label="DTE" align="right" />
-                  <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Price</th>
-                  <SortableHeader column="value" label="Value" align="right" />
-                  <SortableHeader column="commission" label="Commission" align="right" />
+                  {visibleColumns.map((col) => {
+                    const sortColumnMap: Record<string, SortColumn> = {
+                      date: 'date',
+                      ticker: 'ticker',
+                      qty: 'qty',
+                      strategy: 'strategy',
+                      dte: 'dte',
+                      cost: 'value',
+                    };
+                    const mappedSortColumn = sortColumnMap[col.id] || null;
+
+                    if (col.id === 'expand') {
+                      return (
+                        <th
+                          key={col.id}
+                          className="px-2 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider relative"
+                          style={{ width: col.width }}
+                        />
+                      );
+                    }
+
+                    return (
+                      <th
+                        key={col.id}
+                        className={`px-4 py-2 text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider relative ${
+                          col.align === 'right' ? 'text-right' : 'text-left'
+                        } ${col.sortable ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600' : ''}`}
+                        style={{ width: col.width }}
+                        onClick={() => col.sortable && mappedSortColumn && handleSort(mappedSortColumn)}
+                      >
+                        <div className={`flex items-center gap-1 ${col.align === 'right' ? 'justify-end' : ''}`}>
+                          <span>{col.label}</span>
+                          {col.sortable && mappedSortColumn && sortColumn === mappedSortColumn && (
+                            sortDirection === 'asc' ? (
+                              <ArrowUp className="h-3 w-3 text-blue-500" />
+                            ) : (
+                              <ArrowDown className="h-3 w-3 text-blue-500" />
+                            )
+                          )}
+                        </div>
+                        {/* Resize handle */}
+                        <div
+                          className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-blue-500 opacity-0 hover:opacity-100"
+                          onMouseDown={(e) => handleResizeStart(col.id, e)}
+                        />
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -686,21 +863,34 @@ export default function PositionsPage() {
                     ? applyQuantitySplitAdjustment(trade.underlying, rawQty, trade.opened_at)
                     : rawQty;
 
-                  const rawPrice = rawQty > 0
-                    ? parseFloat(trade.opening_cost) / rawQty / priceMultiplier
-                    : 0;
-
-                  const netPrice = isStockTrade
-                    ? applyPriceSplitAdjustment(trade.underlying, rawPrice, trade.opened_at)
-                    : rawPrice;
-
-                  const netValue = aggregated.reduce((sum, g) => sum + g.totalValue, 0);
                   const totalComm = aggregated.reduce((sum, g) => sum + g.totalCommission, 0);
 
-                  return (
-                    <React.Fragment key={trade.id}>
-                      <tr className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <td className="px-4 py-2 whitespace-nowrap">
+                  // Avg Price includes commission per share/contract
+                  const rawAvgPrice = rawQty > 0
+                    ? (parseFloat(trade.opening_cost) + totalComm) / rawQty / priceMultiplier
+                    : 0;
+
+                  const avgPrice = isStockTrade
+                    ? applyPriceSplitAdjustment(trade.underlying, rawAvgPrice, trade.opened_at)
+                    : rawAvgPrice;
+
+                  // Cost = Avg Price * Qty (includes commission)
+                  const cost = avgPrice * qty * priceMultiplier;
+
+                  // Market Value - placeholder for future market data integration
+                  const marketValue: number | null = null; // TODO: Fetch from market data API
+
+                  // Unrealized P&L = Market Value - Cost
+                  const unrealizedPnl = marketValue !== null ? marketValue - cost : null;
+                  const unrealizedPnlPercent = marketValue !== null && cost !== 0
+                    ? ((marketValue - cost) / Math.abs(cost)) * 100
+                    : null;
+
+                  // Helper to render cell content based on column id
+                  const renderCellContent = (columnId: string) => {
+                    switch (columnId) {
+                      case 'expand':
+                        return (
                           <button
                             onClick={() => toggleTradeExpansion(trade.id)}
                             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
@@ -711,59 +901,89 @@ export default function PositionsPage() {
                               <ChevronRight className="h-4 w-4" />
                             )}
                           </button>
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                          {formatDate(trade.opened_at)}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
-                          {trade.underlying}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
-                          {qty}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                          {trade.strategy_type}
-                          {trade.is_assignment && (
-                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 rounded">
-                              ASSIGN
-                            </span>
-                          )}
-                          {trade.is_roll && !trade.is_assignment && (
-                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded">
-                              ROLL
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                          {strikes}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                          {expiration ? formatDate(expiration.toISOString()) : '-'}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
-                          {dte !== null ? (
-                            <span className={dte <= 7 ? 'text-red-600 dark:text-red-400 font-semibold' : ''}>
-                              {dte}
-                            </span>
-                          ) : '-'}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
-                          {formatCurrency(netPrice)}
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-right">
-                          <span className={netValue >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                            {formatCurrency(netValue)}
+                        );
+                      case 'date':
+                        return formatDate(trade.opened_at);
+                      case 'ticker':
+                        return <span className="font-medium">{trade.underlying}</span>;
+                      case 'qty':
+                        return qty;
+                      case 'strategy':
+                        return (
+                          <>
+                            {trade.strategy_type}
+                            {trade.is_assignment && (
+                              <span className="ml-2 px-1.5 py-0.5 text-xs bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 rounded">
+                                ASSIGN
+                              </span>
+                            )}
+                            {trade.is_roll && !trade.is_assignment && (
+                              <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded">
+                                ROLL
+                              </span>
+                            )}
+                          </>
+                        );
+                      case 'strike':
+                        return strikes;
+                      case 'expiration':
+                        return expiration ? formatDate(expiration.toISOString()) : '-';
+                      case 'dte':
+                        return dte !== null ? (
+                          <span className={dte <= 7 ? 'text-red-600 dark:text-red-400 font-semibold' : ''}>
+                            {dte}
                           </span>
-                        </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white text-right">
-                          ${totalComm.toFixed(2)}
-                        </td>
+                        ) : '-';
+                      case 'avgPrice':
+                        return formatCurrency(avgPrice);
+                      case 'cost':
+                        return (
+                          <span className={cost >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                            {formatCurrency(cost)}
+                          </span>
+                        );
+                      case 'marketValue':
+                        return marketValue !== null ? formatCurrency(marketValue) : '-';
+                      case 'unrealizedPnl':
+                        return unrealizedPnl !== null ? (
+                          <div className="flex flex-col items-end">
+                            <span className={unrealizedPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                              {formatCurrency(unrealizedPnl)}
+                            </span>
+                            <span className={`text-xs ${unrealizedPnlPercent !== null && unrealizedPnlPercent >= 0 ? 'text-green-500 dark:text-green-500' : 'text-red-500 dark:text-red-500'}`}>
+                              {unrealizedPnlPercent !== null ? `(${unrealizedPnlPercent >= 0 ? '+' : ''}${unrealizedPnlPercent.toFixed(2)}%)` : ''}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">-</span>
+                        );
+                      case 'commission':
+                        return `$${totalComm.toFixed(2)}`;
+                      default:
+                        return '-';
+                    }
+                  };
+
+                  return (
+                    <React.Fragment key={trade.id}>
+                      <tr className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                        {visibleColumns.map((col) => (
+                          <td
+                            key={col.id}
+                            className={`px-4 py-2 whitespace-nowrap text-sm text-gray-900 dark:text-white ${
+                              col.align === 'right' ? 'text-right' : 'text-left'
+                            }`}
+                            style={{ width: col.width }}
+                          >
+                            {renderCellContent(col.id)}
+                          </td>
+                        ))}
                       </tr>
 
                       {/* Expanded execution details */}
                       {expandedTrades.has(trade.id) && executions.length > 0 && (
                         <tr>
-                          <td colSpan={11} className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50">
+                          <td colSpan={visibleColumns.length} className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50">
                             {/* Data Source Indicator */}
                             <div className="flex items-center gap-2 mb-3">
                               <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
@@ -1071,6 +1291,76 @@ export default function PositionsPage() {
                 Clear filters
               </button>
             )}
+
+            {/* Column Settings Button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowColumnSettings(!showColumnSettings)}
+                className={`p-2 rounded-lg transition-colors ${
+                  showColumnSettings
+                    ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                }`}
+                title="Column Settings"
+              >
+                <Settings2 className="h-5 w-5" />
+              </button>
+
+              {/* Column Settings Panel */}
+              {showColumnSettings && (
+                <div className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50">
+                  <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                    <h4 className="font-medium text-gray-900 dark:text-white">Column Settings</h4>
+                    <button
+                      onClick={resetColumns}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Reset to Default
+                    </button>
+                  </div>
+                  <div className="p-2 max-h-80 overflow-y-auto">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2 px-2">
+                      Drag to reorder. Click eye to show/hide.
+                    </p>
+                    {columns.filter(c => c.id !== 'expand').map((col) => (
+                      <div
+                        key={col.id}
+                        draggable
+                        onDragStart={() => handleDragStart(col.id)}
+                        onDragOver={(e) => handleDragOver(e, col.id)}
+                        onDragEnd={handleDragEnd}
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-move ${
+                          draggedColumn === col.id ? 'opacity-50' : ''
+                        }`}
+                      >
+                        <GripVertical className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                        <span className={`flex-1 text-sm ${col.visible ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500'}`}>
+                          {col.label}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleColumnVisibility(col.id);
+                          }}
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                        >
+                          {col.visible ? (
+                            <Eye className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                          ) : (
+                            <EyeOff className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 dark:border-gray-700">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                      Drag column borders to resize
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Results count */}
             <div className="ml-auto text-sm text-gray-500 dark:text-gray-400">
