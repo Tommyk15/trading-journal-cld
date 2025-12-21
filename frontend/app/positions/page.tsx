@@ -110,7 +110,15 @@ export default function PositionsPage() {
       const saved = localStorage.getItem('positionsColumnConfig');
       if (saved) {
         try {
-          return JSON.parse(saved);
+          const savedColumns = JSON.parse(saved) as ColumnConfig[];
+          // Merge any new columns from DEFAULT_COLUMNS that don't exist in saved config
+          const savedIds = new Set(savedColumns.map(c => c.id));
+          const newColumns = DEFAULT_COLUMNS.filter(c => !savedIds.has(c.id));
+          if (newColumns.length > 0) {
+            // Add new columns at the end
+            return [...savedColumns, ...newColumns];
+          }
+          return savedColumns;
         } catch (e) {
           // Ignore parse errors
         }
