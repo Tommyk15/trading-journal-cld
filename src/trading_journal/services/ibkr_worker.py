@@ -329,8 +329,11 @@ class IBKRWorker:
             contract = fill.contract
             commission_report = fill.commissionReport
 
-            # Parse execution time
-            exec_time = datetime.strptime(execution.time, "%Y%m%d %H:%M:%S")
+            # Parse execution time - handle both string and datetime
+            if isinstance(execution.time, datetime):
+                exec_time = execution.time
+            else:
+                exec_time = datetime.strptime(execution.time, "%Y%m%d %H:%M:%S")
 
             # Base execution data
             exec_data = {
@@ -350,9 +353,12 @@ class IBKRWorker:
 
             # Option-specific fields
             if contract.secType == "OPT":
-                exp_date = datetime.strptime(
-                    contract.lastTradeDateOrContractMonth, "%Y%m%d"
-                )
+                # Handle both string and datetime for expiration
+                exp_val = contract.lastTradeDateOrContractMonth
+                if isinstance(exp_val, datetime):
+                    exp_date = exp_val
+                else:
+                    exp_date = datetime.strptime(exp_val, "%Y%m%d")
                 exec_data.update({
                     "option_type": contract.right,  # C or P
                     "strike": float(contract.strike),
