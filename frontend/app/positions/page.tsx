@@ -679,9 +679,43 @@ export default function PositionsPage() {
     const pairedResults: any[] = [];
 
     Object.entries(groups).forEach(([key, execs]) => {
-      const openingExecs = execs.filter(e => e.open_close_indicator === 'O');
-      const closingExecs = execs.filter(e => e.open_close_indicator === 'C');
-      const isLongPosition = openingExecs.some(e => e.side === 'BOT');
+      // First try to use open_close_indicator if available
+      let openingExecs = execs.filter(e => e.open_close_indicator === 'O');
+      let closingExecs = execs.filter(e => e.open_close_indicator === 'C');
+
+      // If open_close_indicator is not set, infer from execution order and side
+      if (openingExecs.length === 0 && closingExecs.length === 0) {
+        // Sort by execution time
+        const sortedExecs = [...execs].sort((a, b) =>
+          new Date(a.execution_time).getTime() - new Date(b.execution_time).getTime()
+        );
+
+        // Track cumulative position to determine open vs close
+        let position = 0;
+        const inferredOpening: TradeExecution[] = [];
+        const inferredClosing: TradeExecution[] = [];
+
+        for (const exec of sortedExecs) {
+          const delta = exec.side === 'BOT' ? exec.quantity : -exec.quantity;
+
+          if (position === 0) {
+            // No position - this is opening
+            inferredOpening.push(exec);
+          } else if ((position > 0 && delta < 0) || (position < 0 && delta > 0)) {
+            // Reducing position - this is closing
+            inferredClosing.push(exec);
+          } else {
+            // Increasing position - this is opening (adding to position)
+            inferredOpening.push(exec);
+          }
+          position += delta;
+        }
+
+        openingExecs = inferredOpening;
+        closingExecs = inferredClosing;
+      }
+
+      const isLongPosition = openingExecs.length > 0 ? openingExecs.some(e => e.side === 'BOT') : false;
 
       const openingQty = openingExecs.reduce((sum, e) => sum + e.quantity, 0);
       const openingWeightedPrice = openingQty > 0

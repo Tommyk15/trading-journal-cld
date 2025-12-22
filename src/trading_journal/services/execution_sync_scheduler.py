@@ -42,6 +42,7 @@ class SyncStats:
     greeks_failed: int = 0
     analytics_populated: int = 0
     max_profit_risk_populated: int = 0
+    commissions_updated: int = 0
     error_message: str | None = None
 
 
@@ -190,6 +191,10 @@ class ExecutionSyncScheduler:
                 # 5. Populate max_profit/max_risk (doesn't require Greeks)
                 max_profit_risk_stats = await self._populate_max_profit_risk(session)
                 stats.max_profit_risk_populated = max_profit_risk_stats.get("populated", 0)
+
+                # 6. Update missing commissions
+                commission_stats = await self._update_missing_commissions(session)
+                stats.commissions_updated = commission_stats.get("updated", 0)
 
                 await session.commit()
 
@@ -347,6 +352,25 @@ class ExecutionSyncScheduler:
 
                     if existing:
                         stats["existing"] += 1
+                        # Update commission if existing has 0 and new data has commission
+                        new_commission = exec_data.get("commission", Decimal("0"))
+                        if existing.commission == 0 and new_commission > 0:
+                            existing.commission = new_commission
+                            # Also update net_amount to include commission if needed
+                            if existing.trade_id:
+                                # Mark trade for commission recalculation
+                                trade_stmt = select(Trade).where(Trade.id == existing.trade_id)
+                                trade_result = await session.execute(trade_stmt)
+                                trade = trade_result.scalar_one_or_none()
+                                if trade:
+                                    # Get all executions for this trade to recalculate
+                                    exec_stmt = select(Execution).where(Execution.trade_id == trade.id)
+                                    exec_result = await session.execute(exec_stmt)
+                                    trade_execs = list(exec_result.scalars().all())
+                                    total_commission = sum(e.commission for e in trade_execs)
+                                    trade.total_commission = total_commission
+                                    if trade.status == "CLOSED":
+                                        trade.realized_pnl = trade.closing_proceeds - trade.opening_cost - total_commission
                         continue
 
                     # Create new execution
@@ -528,6 +552,103 @@ class ExecutionSyncScheduler:
 
         except Exception as e:
             logger.error(f"Error in max profit/risk population: {e}")
+
+        return stats
+
+    async def _update_missing_commissions(
+        self,
+        session,
+        limit: int = 100,
+    ) -> dict:
+        """Update commissions for executions that have 0 commission.
+
+        This fetches updated execution data from IBKR and updates the
+        commission values for executions where commission is 0.
+
+        Args:
+            session: Database session
+            limit: Maximum executions to process per cycle
+
+        Returns:
+            Statistics dict
+        """
+        stats = {"updated": 0, "trades_updated": 0}
+
+        try:
+            # Find executions with 0 commission from today
+            from datetime import timedelta
+            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+            stmt = select(Execution).where(
+                Execution.commission == 0,
+                Execution.execution_time >= today_start - timedelta(days=7),  # Last 7 days
+            ).limit(limit)
+
+            result = await session.execute(stmt)
+            zero_commission_execs = list(result.scalars().all())
+
+            if not zero_commission_execs:
+                return stats
+
+            logger.info(f"Found {len(zero_commission_execs)} executions with 0 commission")
+
+            # Fetch fresh execution data from IBKR worker
+            from trading_journal.services.ibkr_client_service import IBKRClientService
+
+            ibkr_client = IBKRClientService()
+            fresh_executions = await ibkr_client.fetch_executions()
+
+            if not fresh_executions:
+                logger.debug("No executions returned from IBKR worker")
+                return stats
+
+            # Build a map of exec_id -> commission
+            exec_commission_map = {
+                exec_data["exec_id"]: Decimal(str(exec_data.get("commission", 0)))
+                for exec_data in fresh_executions
+            }
+
+            # Update executions with new commission values
+            trade_ids_to_update = set()
+            for exec in zero_commission_execs:
+                if exec.exec_id in exec_commission_map:
+                    new_commission = exec_commission_map[exec.exec_id]
+                    if new_commission > 0:
+                        exec.commission = new_commission
+                        stats["updated"] += 1
+                        if exec.trade_id:
+                            trade_ids_to_update.add(exec.trade_id)
+
+            # Update trade total_commission for affected trades
+            if trade_ids_to_update:
+                for trade_id in trade_ids_to_update:
+                    # Get all executions for this trade
+                    exec_stmt = select(Execution).where(Execution.trade_id == trade_id)
+                    exec_result = await session.execute(exec_stmt)
+                    trade_execs = list(exec_result.scalars().all())
+
+                    total_commission = sum(e.commission for e in trade_execs)
+
+                    # Update the trade
+                    trade_stmt = select(Trade).where(Trade.id == trade_id)
+                    trade_result = await session.execute(trade_stmt)
+                    trade = trade_result.scalar_one_or_none()
+
+                    if trade:
+                        trade.total_commission = total_commission
+                        # Recalculate realized_pnl
+                        if trade.status == "CLOSED":
+                            trade.realized_pnl = trade.closing_proceeds - trade.opening_cost - total_commission
+                        stats["trades_updated"] += 1
+
+            if stats["updated"] > 0:
+                logger.info(
+                    f"Updated commissions: {stats['updated']} executions, "
+                    f"{stats['trades_updated']} trades"
+                )
+
+        except Exception as e:
+            logger.error(f"Error updating commissions: {e}")
 
         return stats
 

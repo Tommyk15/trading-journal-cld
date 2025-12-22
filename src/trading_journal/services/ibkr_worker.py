@@ -301,7 +301,24 @@ class IBKRWorker:
             return []
 
         try:
+            # Request executions - this triggers IBKR to send fills
             fills = await self.ib.reqExecutionsAsync()
+
+            # Check if any fills are missing commission reports
+            missing_commission = any(
+                fill.commissionReport is None or
+                (fill.commissionReport and fill.commissionReport.commission >= 1e+300)
+                for fill in fills
+            )
+
+            if missing_commission:
+                # Wait for commission reports to arrive
+                # IBKR sends them separately after fills
+                await asyncio.sleep(1.0)
+
+                # Re-fetch fills from the IB object (they're updated in place)
+                fills = self.ib.fills()
+
             executions = []
 
             for fill in fills:
@@ -374,9 +391,17 @@ class IBKRWorker:
                 })
 
             # Commission data
-            if commission_report:
-                exec_data["commission"] = float(commission_report.commission)
+            # IBKR uses MAX_FLOAT (1.7976931348623157e+308) to indicate "not yet reported"
+            if commission_report and commission_report.commission is not None:
+                commission_value = float(commission_report.commission)
+                # Check for MAX_FLOAT indicating "not yet reported"
+                if commission_value < 1e+300:
+                    exec_data["commission"] = commission_value
+                else:
+                    logger.debug(f"Commission not yet reported for {execution.execId}")
+                    exec_data["commission"] = 0.0
             else:
+                logger.debug(f"No commission report for {execution.execId}")
                 exec_data["commission"] = 0.0
 
             # Calculate net amount (price * quantity * multiplier)
