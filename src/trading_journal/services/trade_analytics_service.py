@@ -327,7 +327,26 @@ class TradeAnalyticsService:
         # Get strike information
         strikes = sorted({leg.strike for leg in legs})
 
-        if strategy_type == StrategyType.VERTICAL_CALL.value:
+        # Map database strategy types to calculation categories
+        vertical_call_types = [
+            StrategyType.VERTICAL_CALL.value,
+            "Bull Call Spread",
+            "Bear Call Spread",
+        ]
+        vertical_put_types = [
+            StrategyType.VERTICAL_PUT.value,
+            "Bull Put Spread",
+            "Bear Put Spread",
+        ]
+        single_types = [
+            StrategyType.SINGLE.value,
+            "Long Call",
+            "Short Call",
+            "Long Put",
+            "Short Put",
+        ]
+
+        if strategy_type in vertical_call_types:
             # Credit spread: max profit = premium, max risk = width - premium
             # Debit spread: max profit = width - premium, max risk = premium
             width = max(strikes) - min(strikes)
@@ -339,7 +358,7 @@ class TradeAnalyticsService:
                 max_risk = abs(net_premium) * multiplier
             return max_profit, max_risk
 
-        elif strategy_type == StrategyType.VERTICAL_PUT.value:
+        elif strategy_type in vertical_put_types:
             width = max(strikes) - min(strikes)
             if net_premium > 0:  # Credit spread
                 max_profit = net_premium * multiplier
@@ -383,9 +402,13 @@ class TradeAnalyticsService:
                 max_risk = abs(net_premium) * multiplier
             return max_profit, max_risk
 
-        elif strategy_type == StrategyType.SINGLE.value:
+        elif strategy_type in single_types:
             leg = legs[0]
-            if leg.quantity > 0:  # Long option
+            # Determine if long or short based on strategy name or leg quantity
+            is_long = leg.quantity > 0 or strategy_type.startswith("Long")
+            is_short = leg.quantity < 0 or strategy_type.startswith("Short")
+
+            if is_long:  # Long option
                 max_profit = None  # Unlimited for calls
                 max_risk = abs(net_premium) * multiplier
                 if leg.option_type == "P":
@@ -690,6 +713,68 @@ class TradeAnalyticsService:
         await session.flush()
         return True
 
+    async def populate_max_profit_risk_only(
+        self,
+        trade,  # Trade model
+        session,  # AsyncSession
+    ) -> bool:
+        """Populate max_profit and max_risk without requiring Greeks.
+
+        This can run for ALL trades regardless of Greeks status.
+        Only calculates max_profit and max_risk from execution data.
+
+        Args:
+            trade: Trade model
+            session: Database session
+
+        Returns:
+            True if successful
+        """
+        from sqlalchemy import select
+        from trading_journal.models.execution import Execution
+
+        # Get executions for this trade
+        stmt = select(Execution).where(Execution.trade_id == trade.id)
+        result = await session.execute(stmt)
+        executions = list(result.scalars().all())
+
+        if not executions:
+            logger.debug(f"Trade {trade.id} has no executions, skipping max profit/risk")
+            return False
+
+        # Build legs from executions
+        legs = self._build_legs_from_executions(executions)
+        if not legs:
+            logger.debug(f"Trade {trade.id} has no option legs, skipping max profit/risk")
+            return False
+
+        # Calculate net premium
+        net_premium = self._calculate_net_premium(executions)
+
+        # Get the number of contracts (use max absolute quantity from legs)
+        num_contracts = max(abs(leg.quantity) for leg in legs) if legs else 1
+
+        # Calculate max profit/risk in dollar terms (multiplier=100 for options)
+        max_profit, max_risk = self.calculate_max_profit_risk(
+            legs,
+            trade.strategy_type or "",
+            net_premium,
+            multiplier=100,  # Standard option contract multiplier
+        )
+
+        # Multiply by number of contracts for total position value
+        if max_profit is not None:
+            max_profit = max_profit * num_contracts
+        if max_risk is not None:
+            max_risk = max_risk * num_contracts
+
+        trade.max_profit = max_profit
+        trade.max_risk = max_risk
+
+        await session.flush()
+        logger.debug(f"Populated max_profit=${max_profit}, max_risk=${max_risk} for trade {trade.id} ({num_contracts} contracts)")
+        return True
+
     async def _fetch_greeks_multi_source(
         self,
         trade,
@@ -913,10 +998,10 @@ class TradeAnalyticsService:
             executions: List of Execution models
 
         Returns:
-            Net premium per contract
+            Net premium per contract (weighted average across all contracts)
         """
-        total_premium = Decimal("0")
-        total_contracts = 0
+        total_premium_value = Decimal("0")  # Total $ value of premium
+        total_contracts = Decimal("0")  # Total number of contracts
 
         for exec in executions:
             if exec.security_type != "OPT":
@@ -924,20 +1009,34 @@ class TradeAnalyticsService:
 
             # Only count opening transactions for premium
             if exec.open_close_indicator == "O":
-                # net_amount is already signed (negative for buys, positive for sells)
-                multiplier = exec.multiplier or 100
-                premium_per_contract = exec.price
+                qty = abs(Decimal(str(exec.quantity)))
+                premium_per_share = Decimal(str(exec.price))
+
+                # Accumulate weighted premium (qty * price)
                 if exec.side == "SLD":
-                    total_premium += premium_per_contract
+                    total_premium_value += premium_per_share * qty
                 else:
-                    total_premium -= premium_per_contract
-                total_contracts += 1
+                    total_premium_value -= premium_per_share * qty
 
-        # Average per contract if multiple legs
+                total_contracts += qty
+
+        # Return weighted average per contract
+        # For a spread with equal quantities on each leg, this gives the net premium per spread
         if total_contracts > 0:
-            return total_premium / total_contracts
+            # Divide by number of unique legs (spreads have 2 legs with equal qty)
+            # Get unique strikes to determine number of legs
+            unique_strikes = set()
+            for exec in executions:
+                if exec.security_type == "OPT" and exec.open_close_indicator == "O":
+                    unique_strikes.add(exec.strike)
+            num_legs = len(unique_strikes) if unique_strikes else 1
 
-        return total_premium
+            # For a 2-leg spread with 75 contracts each side, total_contracts = 150
+            # We want net premium per spread, so divide by (total_contracts / num_legs)
+            contracts_per_leg = total_contracts / num_legs if num_legs > 0 else total_contracts
+            return total_premium_value / contracts_per_leg if contracts_per_leg > 0 else total_premium_value
+
+        return total_premium_value
 
     def _calculate_collateral(
         self,

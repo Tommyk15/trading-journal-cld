@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Header } from '@/components/layout/Header';
 import { api } from '@/lib/api/client';
-import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
+import { formatCurrency, formatDate, getPnlColor, formatPriceSmart, formatNumberSmart } from '@/lib/utils';
 import type { Trade, TradeAnalytics as TradeAnalyticsType, Tag } from '@/types';
 import { ChevronDown, ChevronRight, ChevronUp, Merge, AlertCircle, Calendar } from 'lucide-react';
 import TradeAnalytics from '@/components/trade-analytics/TradeAnalytics';
@@ -542,7 +542,7 @@ export default function TradesPage() {
               const totalOpenValue = pairs.reduce((sum, p) => sum + (p.openValue || 0), 0);
               const totalQty = Math.max(...pairs.map(p => p.quantity));
               const pricePerContract = totalQty > 0 ? totalOpenValue / totalQty / multiplier : 0;
-              return formatCurrency(pricePerContract);
+              return formatPriceSmart(pricePerContract);
             })()}
           </td>
         );
@@ -556,7 +556,7 @@ export default function TradesPage() {
               const totalCloseValue = pairs.reduce((sum, p) => sum + (p.closeValue || 0), 0);
               const totalQty = Math.max(...pairs.map(p => p.quantity));
               const pricePerContract = totalQty > 0 ? totalCloseValue / totalQty / multiplier : 0;
-              return formatCurrency(pricePerContract);
+              return formatPriceSmart(pricePerContract);
             })()}
           </td>
         );
@@ -1262,10 +1262,11 @@ export default function TradesPage() {
                     const executions = tradeExecutions[trade.id];
                     const aggregated = executions ? aggregateExecutions(executions) : [];
 
-                    // Calculate strikes for display (e.g., "250/270") - only when executions loaded
+                    // Calculate strikes for display (e.g., "250/270" or "12.5/15") - only when executions loaded
                     const strikes = aggregated.length > 0
                       ? [...new Set(aggregated.map(g => parseFloat(g.strike)))]
                           .sort((a, b) => a - b)
+                          .map(s => formatNumberSmart(s))
                           .join('/')
                       : '-';
 
@@ -1342,13 +1343,13 @@ export default function TradesPage() {
                                       </td>
                                       <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">{pair.quantity}</td>
                                       <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{pair.type}</td>
-                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">${pair.strike}</td>
+                                      <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white">${formatNumberSmart(parseFloat(pair.strike))}</td>
                                       <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{formatDate(pair.expiration)}</td>
                                       <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
-                                        {pair.openPrice !== null ? `$${pair.openPrice.toFixed(2)}` : '-'}
+                                        {pair.openPrice !== null ? formatPriceSmart(pair.openPrice) : '-'}
                                       </td>
                                       <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
-                                        {pair.closePrice !== null ? `$${pair.closePrice.toFixed(2)}` : '-'}
+                                        {pair.closePrice !== null ? formatPriceSmart(pair.closePrice) : '-'}
                                       </td>
                                       <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
                                         ${pair.totalCommission.toFixed(2)}

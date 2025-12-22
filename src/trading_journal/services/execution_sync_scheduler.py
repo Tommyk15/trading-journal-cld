@@ -41,6 +41,7 @@ class SyncStats:
     greeks_fetched: int = 0
     greeks_failed: int = 0
     analytics_populated: int = 0
+    max_profit_risk_populated: int = 0
     error_message: str | None = None
 
 
@@ -185,6 +186,10 @@ class ExecutionSyncScheduler:
                 # 4. Populate analytics for trades missing data
                 analytics_stats = await self._populate_trade_analytics(session)
                 stats.analytics_populated = analytics_stats.get("populated", 0)
+
+                # 5. Populate max_profit/max_risk (doesn't require Greeks)
+                max_profit_risk_stats = await self._populate_max_profit_risk(session)
+                stats.max_profit_risk_populated = max_profit_risk_stats.get("populated", 0)
 
                 await session.commit()
 
@@ -473,6 +478,56 @@ class ExecutionSyncScheduler:
 
         except Exception as e:
             logger.error(f"Error in analytics population: {e}")
+
+        return stats
+
+    async def _populate_max_profit_risk(
+        self,
+        session,
+        limit: int = 100,
+    ) -> dict:
+        """Populate max_profit/max_risk for trades missing them.
+
+        Unlike _populate_analytics, this doesn't require Greeks to be present.
+        It only needs execution data to calculate max profit and risk.
+
+        Args:
+            session: Database session
+            limit: Maximum trades to process per cycle
+
+        Returns:
+            Statistics dict
+        """
+        from trading_journal.services.trade_analytics_service import TradeAnalyticsService
+
+        stats = {"populated": 0}
+
+        try:
+            # Find trades missing max_profit (regardless of Greeks status)
+            stmt = select(Trade).where(
+                Trade.max_profit.is_(None),  # Missing max_profit
+            ).limit(limit)
+
+            result = await session.execute(stmt)
+            trades = list(result.scalars().all())
+
+            if trades:
+                logger.info(f"Populating max_profit/risk for {len(trades)} trades")
+
+            analytics_service = TradeAnalyticsService()
+
+            for trade in trades:
+                try:
+                    success = await analytics_service.populate_max_profit_risk_only(
+                        trade, session
+                    )
+                    if success:
+                        stats["populated"] += 1
+                except Exception as e:
+                    logger.error(f"Error populating max profit/risk for trade {trade.id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in max profit/risk population: {e}")
 
         return stats
 

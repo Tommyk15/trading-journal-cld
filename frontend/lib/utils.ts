@@ -28,6 +28,27 @@ export function formatPrice(value: number): string {
   }).format(value);
 }
 
+// Format currency with smart decimals (show decimals only if not a round number)
+export function formatPriceSmart(value: number): string {
+  const isWholeNumber = Number.isInteger(value);
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: isWholeNumber ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+// Format number with smart decimals (show decimals only if not a round number)
+export function formatNumberSmart(value: number): string {
+  const isWholeNumber = Number.isInteger(value);
+  if (isWholeNumber) {
+    return value.toString();
+  }
+  // Show up to 2 decimal places, but trim trailing zeros
+  return value.toFixed(2).replace(/\.?0+$/, '');
+}
+
 // Format percentage values
 export function formatPercent(value: number, decimals: number = 2): string {
   return `${(value * 100).toFixed(decimals)}%`;
