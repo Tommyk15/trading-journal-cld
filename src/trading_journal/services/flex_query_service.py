@@ -288,6 +288,22 @@ class FlexQueryService:
             if open_close and len(open_close) > 1:
                 open_close = open_close[0]  # Take first character (O or C)
 
+            # Determine side
+            side = "BOT" if row.get("Buy/Sell", "").upper() == "BUY" else "SLD"
+
+            # Calculate raw net_amount WITHOUT commission
+            # IBKR's NetCash includes commission:
+            #   BOT: net_cash = -(cost + commission) [negative]
+            #   SLD: net_cash = +(proceeds - commission) [positive]
+            # We want raw amount without commission for consistency with real-time API
+            # which calculates: net_amount = price * qty * multiplier (no commission)
+            if side == "BOT":
+                # For buys: net_cash = -(cost + comm), raw = net_cash + comm
+                raw_net_amount = net_cash + commission
+            else:
+                # For sells: net_cash = +(proceeds - comm), raw = net_cash + comm
+                raw_net_amount = net_cash + commission
+
             # Base execution data
             execution = {
                 "exec_id": row.get("IBExecID", "") or f"CSV_{trade_id}_{order_id}",
@@ -298,12 +314,12 @@ class FlexQueryService:
                 "security_type": security_type,
                 "exchange": row.get("Exchange", "SMART") or "SMART",
                 "currency": row.get("CurrencyPrimary", "USD") or "USD",
-                "side": "BOT" if row.get("Buy/Sell", "").upper() == "BUY" else "SLD",
+                "side": side,
                 "open_close_indicator": open_close if open_close else None,
                 "quantity": quantity,
                 "price": price,
                 "commission": commission,
-                "net_amount": net_cash,
+                "net_amount": raw_net_amount,
                 "account_id": row.get("ClientAccountID", "FLEX_IMPORT") or "FLEX_IMPORT",
             }
 

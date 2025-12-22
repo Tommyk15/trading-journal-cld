@@ -3,11 +3,145 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_journal.models.execution import Execution
 from trading_journal.models.trade import Trade
+
+
+async def get_position_cost_basis(
+    session: AsyncSession,
+    underlying: str,
+    strike: Decimal | None = None,
+    option_type: str | None = None,
+    expiration: datetime | None = None,
+) -> dict:
+    """Calculate IBKR-style position cost basis.
+
+    Aggregates all executions for the same position (underlying/strike/exp)
+    across ALL trades to calculate total position cost basis.
+
+    This matches how IBKR calculates cost basis at the position level,
+    rather than at the individual trade level.
+
+    Args:
+        session: Database session
+        underlying: Underlying symbol
+        strike: Option strike price (None for stocks)
+        option_type: 'C' or 'P' (None for stocks)
+        expiration: Option expiration date (None for stocks)
+
+    Returns:
+        Dict with position cost basis info:
+        {
+            "underlying": str,
+            "security_type": "STK" or "OPT",
+            "strike": Decimal or None,
+            "option_type": str or None,
+            "expiration": datetime or None,
+            "total_bought_qty": Decimal,
+            "total_sold_qty": Decimal,
+            "net_position": Decimal,
+            "total_cost": Decimal (total spent on buys),
+            "total_proceeds": Decimal (total received from sells),
+            "net_cost": Decimal (cost - proceeds),
+            "position_cost_basis": Decimal (cost for remaining position),
+            "avg_cost_per_unit": Decimal,
+        }
+    """
+    # Build query conditions
+    conditions = [Execution.underlying == underlying]
+
+    if strike is not None:
+        conditions.append(Execution.strike == strike)
+        conditions.append(Execution.security_type == "OPT")
+    else:
+        conditions.append(Execution.security_type == "STK")
+
+    if option_type is not None:
+        conditions.append(Execution.option_type == option_type)
+
+    if expiration is not None:
+        # Handle timezone-aware comparison
+        conditions.append(func.date(Execution.expiration) == func.date(expiration))
+
+    # Query all executions for this position
+    stmt = select(Execution).where(and_(*conditions))
+    result = await session.execute(stmt)
+    executions = list(result.scalars().all())
+
+    if not executions:
+        return {
+            "underlying": underlying,
+            "security_type": "OPT" if strike else "STK",
+            "strike": strike,
+            "option_type": option_type,
+            "expiration": expiration,
+            "total_bought_qty": Decimal("0"),
+            "total_sold_qty": Decimal("0"),
+            "net_position": Decimal("0"),
+            "total_cost": Decimal("0"),
+            "total_proceeds": Decimal("0"),
+            "net_cost": Decimal("0"),
+            "position_cost_basis": Decimal("0"),
+            "avg_cost_per_unit": Decimal("0"),
+        }
+
+    # Calculate aggregates
+    total_bought_qty = Decimal("0")
+    total_sold_qty = Decimal("0")
+    total_cost = Decimal("0")  # Money spent on buys
+    total_proceeds = Decimal("0")  # Money received from sells
+
+    # Get multiplier (100 for options, 1 for stocks)
+    multiplier = Decimal("1")
+    security_type = executions[0].security_type
+    if security_type == "OPT":
+        multiplier = Decimal(str(executions[0].multiplier or 100))
+
+    for exec in executions:
+        if exec.side == "BOT":
+            total_bought_qty += exec.quantity
+            total_cost += abs(exec.net_amount)
+        else:  # SLD
+            total_sold_qty += exec.quantity
+            total_proceeds += abs(exec.net_amount)
+
+    net_position = total_bought_qty - total_sold_qty
+    net_cost = total_cost - total_proceeds
+
+    # Calculate position cost basis for remaining position
+    # Using average cost methodology (like IBKR)
+    if net_position > 0 and total_bought_qty > 0:
+        # Long position: cost basis is proportional share of total cost
+        avg_cost_per_contract = total_cost / total_bought_qty
+        position_cost_basis = avg_cost_per_contract * net_position
+        avg_cost_per_unit = avg_cost_per_contract / multiplier
+    elif net_position < 0 and total_sold_qty > 0:
+        # Short position: cost basis is proportional share of proceeds
+        avg_proceeds_per_contract = total_proceeds / total_sold_qty
+        position_cost_basis = -avg_proceeds_per_contract * abs(net_position)
+        avg_cost_per_unit = avg_proceeds_per_contract / multiplier
+    else:
+        position_cost_basis = Decimal("0")
+        avg_cost_per_unit = Decimal("0")
+
+    return {
+        "underlying": underlying,
+        "security_type": security_type,
+        "strike": strike,
+        "option_type": option_type,
+        "expiration": expiration,
+        "total_bought_qty": total_bought_qty,
+        "total_sold_qty": total_sold_qty,
+        "net_position": net_position,
+        "total_cost": total_cost,
+        "total_proceeds": total_proceeds,
+        "net_cost": net_cost,
+        "position_cost_basis": position_cost_basis,
+        "avg_cost_per_unit": avg_cost_per_unit,
+    }
 
 
 class TradeService:

@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Header, ActionButton } from '@/components/layout/Header';
 import { api, PositionsMarketDataResponse, PositionMarketDataResponse } from '@/lib/api/client';
-import { formatCurrency, formatDate, getPnlColor } from '@/lib/utils';
+import { formatCurrency, formatPrice, formatDate, getPnlColor } from '@/lib/utils';
 import { RefreshCw, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Briefcase, Layers, BarChart3, Box, ArrowUpDown, ArrowUp, ArrowDown, Search, X, Settings2, GripVertical, Eye, EyeOff } from 'lucide-react';
 
 // Stock split type for adjustment calculations
@@ -74,7 +74,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'strike', label: 'Strike', visible: true, width: 80, minWidth: 60, sortable: false, align: 'left' },
   { id: 'expiration', label: 'Expiration', visible: true, width: 100, minWidth: 80, sortable: false, align: 'left' },
   { id: 'dte', label: 'DTE', visible: true, width: 60, minWidth: 50, sortable: true, align: 'right' },
-  { id: 'underlying', label: 'Underlying', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
+  { id: 'underlyingPrice', label: 'Underlying Price', visible: true, width: 120, minWidth: 100, sortable: false, align: 'right' },
   { id: 'avgPrice', label: 'Avg Price', visible: true, width: 100, minWidth: 80, sortable: false, align: 'right' },
   { id: 'cost', label: 'Cost', visible: true, width: 110, minWidth: 80, sortable: true, align: 'right' },
   { id: 'marketValue', label: 'Market Value', visible: true, width: 110, minWidth: 80, sortable: false, align: 'right' },
@@ -969,20 +969,34 @@ export default function PositionsPage() {
                             {dte}
                           </span>
                         ) : '-';
-                      case 'underlying':
+                      case 'underlyingPrice':
                         if (marketDataLoading) {
                           return <span className="text-gray-400 dark:text-gray-500 animate-pulse">...</span>;
                         }
-                        const underlyingPrice = tradeMarketData?.underlying_price ?? null;
-                        return underlyingPrice !== null ? (
-                          <span className={isMarketDataStale ? 'text-gray-500 dark:text-gray-400' : 'font-medium'}>
-                            {formatCurrency(underlyingPrice)}
-                          </span>
+                        const underlyingPriceVal = tradeMarketData?.underlying_price ?? null;
+                        const priceSource = tradeMarketData?.source ?? null;
+                        return underlyingPriceVal !== null ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <span className={isMarketDataStale ? 'text-gray-500 dark:text-gray-400' : 'font-medium'}>
+                              {formatPrice(underlyingPriceVal)}
+                            </span>
+                            {priceSource && (
+                              <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
+                                isMarketDataStale
+                                  ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                                  : priceSource === 'IBKR'
+                                    ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400'
+                                    : 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400'
+                              }`}>
+                                {priceSource === 'IBKR' ? 'IB' : 'PG'}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-gray-400 dark:text-gray-500">-</span>
                         );
                       case 'avgPrice':
-                        return formatCurrency(avgPrice);
+                        return formatPrice(avgPrice);
                       case 'cost':
                         return (
                           <span className={cost >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
@@ -1017,7 +1031,7 @@ export default function PositionsPage() {
                           <span className="text-gray-400 dark:text-gray-500">-</span>
                         );
                       case 'commission':
-                        return `$${totalComm.toFixed(2)}`;
+                        return formatPrice(totalComm);
                       default:
                         return '-';
                     }
@@ -1098,10 +1112,10 @@ export default function PositionsPage() {
                                         {pair.expiration ? formatDate(pair.expiration) : '-'}
                                       </td>
                                       <td className="px-3 py-2 text-sm font-medium text-gray-900 dark:text-white text-right">
-                                        {displayPrice !== null ? `$${displayPrice.toFixed(2)}` : '-'}
+                                        {displayPrice !== null ? formatCurrency(displayPrice) : '-'}
                                       </td>
                                       <td className="px-3 py-2 text-sm text-gray-900 dark:text-white text-right">
-                                        ${pair.totalCommission.toFixed(2)}
+                                        {formatCurrency(pair.totalCommission)}
                                       </td>
                                     </tr>
                                   );
@@ -1138,33 +1152,80 @@ export default function PositionsPage() {
     shortPositions: OpenTrade[];
     color: string;
   }) {
-    const totalCount = longPositions.length + shortPositions.length;
-    const sectionCost = [...longPositions, ...shortPositions].reduce((sum, t) => sum + parseFloat(t.opening_cost || '0'), 0);
+    const allPositions = [...longPositions, ...shortPositions];
+    const totalCount = allPositions.length;
+    const sectionCost = allPositions.reduce((sum, t) => sum + parseFloat(t.opening_cost || '0'), 0);
     const isSectionCollapsed = collapsedSections.has(category);
+
+    // Calculate market value and unrealized P&L from market data
+    let sectionMarketValue = 0;
+    let sectionUnrealizedPnl = 0;
+    let hasMarketData = false;
+
+    allPositions.forEach(trade => {
+      const md = marketDataByTradeId[trade.id];
+      if (md) {
+        hasMarketData = true;
+        if (md.total_market_value !== null) {
+          sectionMarketValue += md.total_market_value;
+        }
+        if (md.unrealized_pnl !== null) {
+          sectionUnrealizedPnl += md.unrealized_pnl;
+        }
+      }
+    });
+
+    // Calculate P&L percentage based on cost
+    const sectionPnlPercent = sectionCost !== 0 ? (sectionUnrealizedPnl / Math.abs(sectionCost)) * 100 : 0;
 
     return (
       <div className="rounded-lg bg-white dark:bg-gray-800 shadow overflow-hidden transition-colors">
         {/* Main Section Header */}
         <div
-          className={`px-4 py-3 ${color} flex items-center justify-between cursor-pointer`}
+          className={`px-4 py-3 ${color} cursor-pointer`}
           onClick={() => toggleSection(category)}
         >
-          <div className="flex items-center gap-3">
-            {icon}
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
-            <span className="px-2 py-0.5 rounded-full bg-white/50 dark:bg-gray-800/50 text-sm font-medium text-gray-900 dark:text-white">
-              {totalCount}
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className={`text-sm font-medium ${sectionCost >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-              {formatCurrency(sectionCost)}
-            </span>
-            {isSectionCollapsed ? (
-              <ChevronRight className="h-5 w-5 text-gray-600 dark:text-gray-400" />
-            ) : (
-              <ChevronDown className="h-5 w-5 text-gray-600 dark:text-gray-400" />
-            )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {icon}
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
+              <span className="px-2 py-0.5 rounded-full bg-white/50 dark:bg-gray-800/50 text-sm font-medium text-gray-900 dark:text-white">
+                {totalCount}
+              </span>
+            </div>
+            <div className="flex items-center gap-6">
+              {/* Summary Stats */}
+              <div className="flex flex-col items-end">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Cost</span>
+                <span className={`text-sm font-semibold ${sectionCost >= 0 ? 'text-gray-900 dark:text-white' : 'text-red-600 dark:text-red-400'}`}>
+                  {formatCurrency(sectionCost)}
+                </span>
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Market Value</span>
+                <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                  {marketDataLoading ? '...' : hasMarketData ? formatCurrency(sectionMarketValue) : '-'}
+                </span>
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-xs text-gray-500 dark:text-gray-400">P&L</span>
+                <span className={`text-sm font-semibold ${sectionUnrealizedPnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {marketDataLoading ? '...' : hasMarketData ? (
+                    <>
+                      {formatCurrency(sectionUnrealizedPnl)}
+                      <span className="text-xs ml-1">
+                        ({sectionPnlPercent >= 0 ? '+' : ''}{sectionPnlPercent.toFixed(2)}%)
+                      </span>
+                    </>
+                  ) : '-'}
+                </span>
+              </div>
+              {isSectionCollapsed ? (
+                <ChevronRight className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+              ) : (
+                <ChevronDown className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+              )}
+            </div>
           </div>
         </div>
 

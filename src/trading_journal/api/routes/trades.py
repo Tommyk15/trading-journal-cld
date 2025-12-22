@@ -1,6 +1,7 @@
 """API routes for trades."""
 
 from datetime import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -24,7 +25,7 @@ from trading_journal.schemas.trade import (
     TradeUpdate,
 )
 from trading_journal.services.trade_grouping_service import TradeGroupingService
-from trading_journal.services.trade_service import TradeService
+from trading_journal.services.trade_service import TradeService, get_position_cost_basis
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -583,3 +584,66 @@ async def reprocess_all_trades(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reprocessing failed: {e}")
+
+
+@router.get("/position-cost-basis/{underlying}")
+async def get_position_cost_basis_endpoint(
+    underlying: str,
+    strike: float | None = Query(None, description="Option strike price"),
+    option_type: str | None = Query(None, description="Option type (C or P)"),
+    expiration: str | None = Query(None, description="Option expiration date (YYYY-MM-DD)"),
+    session: AsyncSession = Depends(get_db),
+):
+    """Get IBKR-style position cost basis for a position.
+
+    Calculates the aggregate cost basis across all trades for the same
+    underlying/strike/expiration combination, matching IBKR's methodology.
+
+    Args:
+        underlying: Underlying symbol
+        strike: Option strike price (omit for stocks)
+        option_type: 'C' for call, 'P' for put (omit for stocks)
+        expiration: Option expiration date in YYYY-MM-DD format (omit for stocks)
+        session: Database session
+
+    Returns:
+        Position cost basis details including total cost, proceeds, and remaining position
+    """
+    # Parse expiration date if provided
+    exp_date = None
+    if expiration:
+        try:
+            exp_date = datetime.strptime(expiration, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid expiration date format. Use YYYY-MM-DD.",
+            )
+
+    # Convert strike to Decimal if provided
+    strike_decimal = Decimal(str(strike)) if strike is not None else None
+
+    result = await get_position_cost_basis(
+        session=session,
+        underlying=underlying,
+        strike=strike_decimal,
+        option_type=option_type,
+        expiration=exp_date,
+    )
+
+    # Convert Decimals to floats for JSON response
+    return {
+        "underlying": result["underlying"],
+        "security_type": result["security_type"],
+        "strike": float(result["strike"]) if result["strike"] else None,
+        "option_type": result["option_type"],
+        "expiration": result["expiration"].isoformat() if result["expiration"] else None,
+        "total_bought_qty": float(result["total_bought_qty"]),
+        "total_sold_qty": float(result["total_sold_qty"]),
+        "net_position": float(result["net_position"]),
+        "total_cost": float(result["total_cost"]),
+        "total_proceeds": float(result["total_proceeds"]),
+        "net_cost": float(result["net_cost"]),
+        "position_cost_basis": float(result["position_cost_basis"]),
+        "avg_cost_per_unit": float(result["avg_cost_per_unit"]),
+    }
