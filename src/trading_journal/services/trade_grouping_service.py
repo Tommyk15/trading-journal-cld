@@ -530,14 +530,29 @@ class TradeGroupingService:
 
         # Calculate timestamps
         opened_at = min(e.execution_time for e in ledger.executions)
-        closed_at = max(e.execution_time for e in ledger.executions) if is_closed else None
+
+        # VALIDATION: A trade can only be CLOSED if it has BOTH buy and sell executions
+        # A trade with only one side (e.g., only sells for a short) is still OPEN
+        has_buys = any(e.side == "BOT" for e in ledger.executions)
+        has_sells = any(e.side == "SLD" for e in ledger.executions)
+        has_both_sides = has_buys and has_sells
+
+        # Override status if marked closed but missing one side
+        actual_closed = is_closed and has_both_sides
+        if is_closed and not has_both_sides:
+            logger.warning(
+                f"Trade for {ledger.underlying} marked closed but only has "
+                f"{'buys' if has_buys else 'sells'}. Overriding to OPEN status."
+            )
+
+        closed_at = max(e.execution_time for e in ledger.executions) if actual_closed else None
 
         # Calculate costs
         # For multi-leg strategies, we need to distinguish between:
         # - Opening executions (initial position entry)
         # - Closing executions (position exit)
 
-        if is_closed:
+        if actual_closed:
             # Trade is closed - all executions contributed to opening or closing
             opening_cost = sum(
                 abs(e.net_amount) for e in ledger.executions
@@ -547,6 +562,7 @@ class TradeGroupingService:
                 abs(e.net_amount) for e in ledger.executions
                 if e.side == "SLD"
             )
+            realized_pnl = ledger.get_pnl()
         else:
             # Trade is still open - calculate net opening cost
             # For spreads: BOT (long leg) - SLD (short leg credit)
@@ -563,18 +579,19 @@ class TradeGroupingService:
             # Net opening cost = cost paid - credit received
             opening_cost = bot_cost - sld_credit
             closing_proceeds = Decimal("0.00")
+            realized_pnl = Decimal("0.00")
 
         total_commission = sum(e.commission for e in ledger.executions)
 
         return {
             "underlying": ledger.underlying,
             "strategy_type": strategy,
-            "status": "CLOSED" if is_closed else "OPEN",
+            "status": "CLOSED" if actual_closed else "OPEN",
             "opened_at": opened_at,
             "closed_at": closed_at,
-            "realized_pnl": ledger.get_pnl() if is_closed else Decimal("0.00"),
+            "realized_pnl": realized_pnl,
             "unrealized_pnl": Decimal("0.00"),  # Requires live market data to calculate
-            "total_pnl": ledger.get_pnl() if is_closed else Decimal("0.00"),
+            "total_pnl": realized_pnl,
             "opening_cost": opening_cost,
             "closing_proceeds": closing_proceeds,
             "total_commission": total_commission,
@@ -1575,7 +1592,6 @@ class TradeGroupingService:
 
         # Timestamps
         opened_at = min(e.execution_time for e in executions)
-        closed_at = max(e.execution_time for e in executions) if group.status == "CLOSED" else None
 
         # Classify strategy based on opening position
         strategy_type = classify_strategy_from_opening(group.opening_position)
@@ -1583,7 +1599,24 @@ class TradeGroupingService:
         # Calculate costs and P&L
         total_commission = sum(e.commission for e in executions)
 
-        if group.status == "CLOSED":
+        # VALIDATION: A trade can only be CLOSED if it has BOTH buy and sell executions
+        # A trade with only one side (e.g., only sells for a short) is still OPEN
+        has_buys = any(e.side == "BOT" for e in executions)
+        has_sells = any(e.side == "SLD" for e in executions)
+        has_both_sides = has_buys and has_sells
+
+        # Override status if marked CLOSED but missing one side
+        actual_status = group.status
+        if group.status == "CLOSED" and not has_both_sides:
+            logger.warning(
+                f"Trade for {group.underlying} marked CLOSED but only has "
+                f"{'buys' if has_buys else 'sells'}. Overriding to OPEN status."
+            )
+            actual_status = "OPEN"
+
+        closed_at = max(e.execution_time for e in executions) if actual_status == "CLOSED" else None
+
+        if actual_status == "CLOSED":
             opening_cost = sum(abs(e.net_amount) for e in executions if e.side == "BOT")
             closing_proceeds = sum(abs(e.net_amount) for e in executions if e.side == "SLD")
             realized_pnl = closing_proceeds - opening_cost - total_commission
@@ -1609,7 +1642,7 @@ class TradeGroupingService:
         trade = Trade(
             underlying=group.underlying,
             strategy_type=strategy_type,
-            status=group.status,
+            status=actual_status,
             opened_at=opened_at,
             closed_at=closed_at,
             realized_pnl=realized_pnl,
