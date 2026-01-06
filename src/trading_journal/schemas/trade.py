@@ -67,6 +67,15 @@ class TradeResponse(TradeBase):
     opening_cost: Decimal = Field(..., description="Opening cost")
     closing_proceeds: Decimal | None = Field(None, description="Closing proceeds")
     total_commission: Decimal = Field(..., description="Total commissions")
+
+    # Wash sale tracking
+    wash_sale_adjustment: Decimal = Field(
+        default=Decimal("0.00"),
+        description="Wash sale disallowed loss added to cost basis"
+    )
+    wash_sale_from_trade_ids: str | None = Field(
+        None, description="Comma-separated IDs of trades that triggered wash sale"
+    )
     num_legs: int = Field(..., description="Number of legs")
     num_executions: int = Field(..., description="Number of executions")
     is_roll: bool = Field(..., description="Whether this is a roll")

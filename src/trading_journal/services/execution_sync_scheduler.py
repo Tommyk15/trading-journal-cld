@@ -293,12 +293,22 @@ class ExecutionSyncScheduler:
             # Import each execution
             for exec_data in executions_data:
                 try:
-                    # Check if already exists
-                    stmt = select(Execution).where(Execution.exec_id == exec_data["exec_id"])
+                    exec_id = exec_data["exec_id"]
+
+                    # Check if already exists (exact match)
+                    stmt = select(Execution).where(Execution.exec_id == exec_id)
                     result = await session.execute(stmt)
                     existing = result.scalar_one_or_none()
 
                     if existing:
+                        stats["existing"] += 1
+                        continue
+
+                    # Check for duplicate with suffix variation
+                    # TWS exec_ids have .01 suffix vs Flex Query
+                    # e.g., TWS: "xxx.03.01.01" vs Flex: "xxx.03.01"
+                    is_duplicate = await self._is_duplicate_exec_id(session, exec_id)
+                    if is_duplicate:
                         stats["existing"] += 1
                         continue
 
@@ -345,8 +355,10 @@ class ExecutionSyncScheduler:
 
             for exec_data in executions_data:
                 try:
-                    # Check if already exists
-                    stmt = select(Execution).where(Execution.exec_id == exec_data["exec_id"])
+                    exec_id = exec_data["exec_id"]
+
+                    # Check if already exists (exact match)
+                    stmt = select(Execution).where(Execution.exec_id == exec_id)
                     result = await session.execute(stmt)
                     existing = result.scalar_one_or_none()
 
@@ -371,6 +383,13 @@ class ExecutionSyncScheduler:
                                     trade.total_commission = total_commission
                                     if trade.status == "CLOSED":
                                         trade.realized_pnl = trade.closing_proceeds - trade.opening_cost - total_commission
+                        continue
+
+                    # Check for duplicate with suffix variation
+                    # (e.g., TWS import may already exist with .01 suffix)
+                    is_duplicate = await self._is_duplicate_exec_id(session, exec_id)
+                    if is_duplicate:
+                        stats["existing"] += 1
                         continue
 
                     # Create new execution
@@ -651,6 +670,42 @@ class ExecutionSyncScheduler:
             logger.error(f"Error updating commissions: {e}")
 
         return stats
+
+    async def _is_duplicate_exec_id(self, session: AsyncSession, exec_id: str) -> bool:
+        """Check if exec_id is a duplicate of an existing execution.
+
+        TWS and Flex Query use slightly different exec_id formats:
+        - Flex Query: "00014248.694947ea.03.01"
+        - TWS:        "00014248.694947ea.03.01.01" (adds .01 suffix)
+
+        This method checks for both patterns to prevent duplicate imports.
+
+        Args:
+            session: Database session
+            exec_id: The execution ID to check
+
+        Returns:
+            True if this is a duplicate of an existing execution
+        """
+        import re
+
+        # Pattern 1: If exec_id ends with .01.01, check for base (.01) version
+        if exec_id.endswith('.01'):
+            # Check if stripping the last .01 matches an existing execution
+            base_exec_id = re.sub(r'\.01$', '', exec_id)
+            stmt = select(Execution).where(Execution.exec_id == base_exec_id)
+            result = await session.execute(stmt)
+            if result.scalar_one_or_none():
+                return True
+
+        # Pattern 2: Check if adding .01 matches an existing execution
+        extended_exec_id = exec_id + '.01'
+        stmt = select(Execution).where(Execution.exec_id == extended_exec_id)
+        result = await session.execute(stmt)
+        if result.scalar_one_or_none():
+            return True
+
+        return False
 
     def _convert_execution_data(self, exec_data: dict) -> dict:
         """Convert worker execution data to database-compatible format.

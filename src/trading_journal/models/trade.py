@@ -51,6 +51,15 @@ class Trade(Base):
     closing_proceeds: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     total_commission: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
 
+    # Wash sale tracking (IRS rule: loss disallowed if substantially identical security
+    # bought within 30 days before or after sale at loss)
+    wash_sale_adjustment: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), nullable=False
+    )
+    # wash_sale_adjustment: Disallowed loss added to cost basis
+    wash_sale_from_trade_ids: Mapped[str | None] = mapped_column(String(255))
+    # wash_sale_from_trade_ids: Comma-separated IDs of trades that triggered wash sale
+
     # Trade structure
     num_legs: Mapped[int] = mapped_column(Integer, nullable=False)
     num_executions: Mapped[int] = mapped_column(Integer, nullable=False)

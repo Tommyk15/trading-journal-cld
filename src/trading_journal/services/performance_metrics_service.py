@@ -38,9 +38,10 @@ class PerformanceMetricsService:
         Returns:
             List of time-series data points with cumulative P&L
         """
+        # Include both CLOSED and EXPIRED trades
         stmt = (
             select(Trade)
-            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .where(Trade.status.in_(["CLOSED", "EXPIRED"]), Trade.closed_at.isnot(None))
             .order_by(Trade.closed_at)
         )
 
@@ -91,9 +92,10 @@ class PerformanceMetricsService:
         Returns:
             List of daily P&L data points
         """
+        # Include both CLOSED and EXPIRED trades
         stmt = (
             select(Trade)
-            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .where(Trade.status.in_(["CLOSED", "EXPIRED"]), Trade.closed_at.isnot(None))
             .order_by(Trade.closed_at)
         )
 
@@ -460,9 +462,10 @@ class PerformanceMetricsService:
         Returns:
             Dictionary with streak information
         """
+        # Include both CLOSED and EXPIRED trades
         stmt = (
             select(Trade)
-            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .where(Trade.status.in_(["CLOSED", "EXPIRED"]), Trade.closed_at.isnot(None))
             .order_by(Trade.closed_at)
         )
 
@@ -551,9 +554,10 @@ class PerformanceMetricsService:
         Returns:
             Dictionary with expectancy and related metrics
         """
+        # Include both CLOSED and EXPIRED trades
         stmt = (
             select(Trade)
-            .where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+            .where(Trade.status.in_(["CLOSED", "EXPIRED"]), Trade.closed_at.isnot(None))
             .order_by(Trade.closed_at)
         )
 

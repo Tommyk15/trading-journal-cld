@@ -607,7 +607,7 @@ export default function CalendarPage() {
         {/* Selected Day Details Modal */}
         {selectedDay && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedDay(null)}>
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
               <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   {selectedDay.date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
@@ -671,7 +671,15 @@ export default function CalendarPage() {
 
                           const strikes = [...new Set(executions.map(e => e.strike).filter(s => s))].sort((a, b) => (a || 0) - (b || 0));
                           const expirations = [...new Set(executions.map(e => e.expiration).filter(e => e))];
-                          const totalQty = executions.reduce((sum, e) => sum + e.quantity, 0) / 2 || trade.num_legs;
+                          // Calculate qty from opening executions only (O/C indicator = 'O')
+                          // For spreads, divide by num_legs to get the spread quantity (not leg quantity)
+                          const openingQty = executions
+                            .filter(e => e.open_close_indicator === 'O')
+                            .reduce((sum, e) => sum + e.quantity, 0);
+                          const numLegs = trade.num_legs || 1;
+                          // Spread qty = total opening contracts / number of legs
+                          const spreadQty = openingQty > 0 ? openingQty / numLegs : 0;
+                          const totalQty = spreadQty || trade.quantity || executions.reduce((sum, e) => sum + e.quantity, 0) / 2 || trade.num_legs;
 
                           const expDisplay = expirations.length > 0
                             ? new Date(expirations[0]!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })

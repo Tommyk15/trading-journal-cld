@@ -647,3 +647,112 @@ async def get_position_cost_basis_endpoint(
         "position_cost_basis": float(result["position_cost_basis"]),
         "avg_cost_per_unit": float(result["avg_cost_per_unit"]),
     }
+
+
+@router.post("/wash-sales/recalculate")
+async def recalculate_wash_sales(
+    session: AsyncSession = Depends(get_db),
+):
+    """Recalculate wash sale adjustments for all open trades.
+
+    This analyzes all trades for wash sale conditions (substantially identical
+    securities purchased within 30 days of a loss sale) and updates cost basis
+    adjustments accordingly.
+
+    Returns:
+        Statistics about the recalculation
+    """
+    from trading_journal.services.wash_sale_service import WashSaleService
+
+    service = WashSaleService(session)
+    stats = await service.recalculate_all_wash_sales()
+
+    return {
+        "trades_checked": stats["trades_checked"],
+        "trades_adjusted": stats["trades_adjusted"],
+        "total_adjustment": float(stats["total_adjustment"]),
+        "message": f"Recalculated wash sales for {stats['trades_checked']} trades, "
+        f"adjusted {stats['trades_adjusted']} trades with total adjustment ${float(stats['total_adjustment']):.2f}",
+    }
+
+
+@router.get("/{trade_id}/wash-sale")
+async def get_trade_wash_sale_details(
+    trade_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get wash sale details for a specific trade.
+
+    Returns the trade's wash sale adjustment, the source trades that triggered
+    it, and the adjusted cost basis.
+
+    Args:
+        trade_id: ID of the trade to check
+        session: Database session
+
+    Returns:
+        Wash sale details including adjustment amount and source trades
+    """
+    from trading_journal.services.wash_sale_service import WashSaleService
+
+    # Get the trade
+    stmt = select(Trade).where(Trade.id == trade_id)
+    result = await session.execute(stmt)
+    trade = result.scalar_one_or_none()
+
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+
+    # Get executions to calculate quantity
+    exec_stmt = select(Execution).where(Execution.trade_id == trade_id)
+    exec_result = await session.execute(exec_stmt)
+    executions = list(exec_result.scalars().all())
+
+    buy_qty = sum(e.quantity for e in executions if e.side == "BOT")
+    sell_qty = sum(e.quantity for e in executions if e.side == "SLD")
+    net_qty = int(buy_qty - sell_qty) if trade.status == "OPEN" else int(buy_qty)
+
+    service = WashSaleService(session)
+    adjusted_cost_basis = service.get_adjusted_cost_basis(trade)
+
+    # Get average costs
+    multiplier = 100  # Options
+    if executions and executions[0].security_type == "STK":
+        multiplier = 1
+
+    original_avg = (
+        float(trade.opening_cost / net_qty / multiplier) if net_qty > 0 else 0
+    )
+    adjusted_avg = (
+        float(service.get_adjusted_avg_cost_per_share(trade, net_qty, multiplier))
+        if net_qty > 0
+        else 0
+    )
+
+    # Parse source trade IDs
+    source_trades = []
+    if trade.wash_sale_from_trade_ids:
+        source_ids = [int(x) for x in trade.wash_sale_from_trade_ids.split(",") if x]
+        for source_id in source_ids:
+            source_stmt = select(Trade).where(Trade.id == source_id)
+            source_result = await session.execute(source_stmt)
+            source_trade = source_result.scalar_one_or_none()
+            if source_trade:
+                source_trades.append({
+                    "trade_id": source_trade.id,
+                    "underlying": source_trade.underlying,
+                    "realized_pnl": float(source_trade.realized_pnl),
+                    "closed_at": source_trade.closed_at.isoformat() if source_trade.closed_at else None,
+                })
+
+    return {
+        "trade_id": trade.id,
+        "underlying": trade.underlying,
+        "quantity": net_qty,
+        "original_opening_cost": float(trade.opening_cost),
+        "wash_sale_adjustment": float(trade.wash_sale_adjustment or 0),
+        "adjusted_cost_basis": float(adjusted_cost_basis),
+        "original_avg_cost_per_share": original_avg,
+        "adjusted_avg_cost_per_share": adjusted_avg,
+        "source_trades": source_trades,
+    }

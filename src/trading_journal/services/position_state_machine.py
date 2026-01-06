@@ -224,14 +224,12 @@ class PositionStateMachine:
     EXPIRATION_CLUSTER_DAYS = 30
 
     def _group_simultaneous(self, executions: list[Execution]) -> list[list[Execution]]:
-        """Group near-simultaneous executions, then split by expiration cluster.
+        """Group near-simultaneous executions, then split by order/expiration/strike.
 
-        Executions are first grouped by time (within SIMULTANEOUS_WINDOW), then
-        each time-based group is split by expiration. Options with expirations
-        more than EXPIRATION_CLUSTER_DAYS apart are treated as separate trades.
-
-        This prevents LEAPs from being grouped with near-term spreads even if
-        they're executed at the same time.
+        Executions are grouped by:
+        1. Time (within SIMULTANEOUS_WINDOW)
+        2. Check if time group forms a valid spread (keep together if so)
+        3. If not a spread, split by order ID / expiration / strike
 
         Args:
             executions: Sorted list of executions
@@ -263,13 +261,183 @@ class PositionStateMachine:
         if current_group:
             time_groups.append(current_group)
 
-        # Second pass: split each time group by expiration cluster
-        final_groups = []
+        # Second pass: check each time group for spread structure BEFORE splitting
+        # If a time group is a valid spread, keep it together
+        spread_checked_groups = []
         for time_group in time_groups:
-            expiration_subgroups = self._split_by_expiration(time_group)
-            final_groups.extend(expiration_subgroups)
+            if self._is_valid_spread(time_group):
+                # This is a spread - keep together, don't split by order_id
+                spread_checked_groups.append(time_group)
+            else:
+                # Not a spread - split by order_id
+                order_subgroups = self._split_by_order_id(time_group)
+                spread_checked_groups.extend(order_subgroups)
+
+        # Third pass: split each group by expiration cluster
+        expiration_groups = []
+        for group in spread_checked_groups:
+            expiration_subgroups = self._split_by_expiration(group)
+            expiration_groups.extend(expiration_subgroups)
+
+        # Fourth pass: split non-spread groups by strike
+        final_groups = []
+        for exp_group in expiration_groups:
+            strike_subgroups = self._split_non_spreads_by_strike(exp_group)
+            final_groups.extend(strike_subgroups)
 
         return final_groups
+
+    def _split_by_order_id(self, executions: list[Execution]) -> list[list[Execution]]:
+        """Split executions by order_id - different orders are different trades.
+
+        Order ID of 0 is treated as "unknown" and those executions are grouped
+        together for further analysis.
+
+        Args:
+            executions: List of executions to split
+
+        Returns:
+            List of execution groups, one per unique order_id
+        """
+        if not executions:
+            return []
+
+        # Group by order_id
+        by_order: dict[int, list[Execution]] = {}
+        unknown_order: list[Execution] = []
+
+        for exec in executions:
+            order_id = exec.order_id or 0
+            if order_id == 0:
+                # Order ID 0 or None - needs further analysis
+                unknown_order.append(exec)
+            else:
+                if order_id not in by_order:
+                    by_order[order_id] = []
+                by_order[order_id].append(exec)
+
+        groups = list(by_order.values())
+
+        # Unknown orders need strike-based splitting
+        if unknown_order:
+            groups.append(unknown_order)
+
+        return groups
+
+    def _split_non_spreads_by_strike(self, executions: list[Execution]) -> list[list[Execution]]:
+        """Split executions by strike if they don't form a valid spread.
+
+        A valid spread has:
+        - Multiple different strikes
+        - Matching quantities (same qty bought and sold)
+        - Same option type (all calls or all puts)
+
+        If executions don't form a valid spread, split them by strike.
+
+        Args:
+            executions: List of executions
+
+        Returns:
+            List of execution groups
+        """
+        if not executions or len(executions) <= 1:
+            return [executions] if executions else []
+
+        # Get unique strikes
+        strikes = set(e.strike for e in executions if e.strike is not None)
+
+        # If only one strike, no need to split
+        if len(strikes) <= 1:
+            return [executions]
+
+        # Check if this looks like a valid spread
+        if self._is_valid_spread(executions):
+            return [executions]
+
+        # Not a valid spread - split by strike
+        by_strike: dict[float, list[Execution]] = {}
+        for exec in executions:
+            strike = float(exec.strike) if exec.strike else 0.0
+            if strike not in by_strike:
+                by_strike[strike] = []
+            by_strike[strike].append(exec)
+
+        return list(by_strike.values())
+
+    def _is_valid_spread(self, executions: list[Execution]) -> bool:
+        """Check if executions form a valid spread structure.
+
+        A valid spread MUST have:
+        - 2+ different strikes with matching quantities
+        - Both buys and sells
+        - Evidence they're part of the same spread order:
+          * Same non-zero order_id for all, OR
+          * ALL have O/C = 'O' (all openings - entered as a spread)
+
+        Key insight: IBKR often assigns DIFFERENT order_ids to each leg of a
+        spread order, so we can't rely on order_id alone. Instead, we check:
+        - If ALL executions have O/C = 'O' (openings) → likely a spread
+        - If ANY execution has O/C = 'C' (closing) → NOT a spread
+          (one leg is closing an old trade, the other opening a new one)
+
+        Args:
+            executions: List of executions to check
+
+        Returns:
+            True if this is definitively a spread order
+        """
+        if len(executions) < 2:
+            return False
+
+        # Must have both buys and sells
+        buys = [e for e in executions if e.side == "BOT"]
+        sells = [e for e in executions if e.side == "SLD"]
+        if not buys or not sells:
+            return False
+
+        # Check O/C indicators - this is the KEY differentiator
+        # If ALL are openings (O/C = 'O'), it's likely a spread entered together
+        # If ANY is a closing (O/C = 'C'), they're separate trades
+        oc_indicators = [e.open_close_indicator for e in executions]
+        has_closing = any(oc == 'C' for oc in oc_indicators)
+
+        if has_closing:
+            # At least one leg is closing - NOT a spread
+            # (e.g., TSLA 492.5 closing + 510 opening = separate trades)
+            return False
+
+        # Check if all have O/C = 'O' (explicit openings)
+        all_opening = all(oc == 'O' for oc in oc_indicators)
+
+        # Check order_ids
+        order_ids = set(e.order_id for e in executions if e.order_id)
+
+        if len(order_ids) == 1:
+            # Single order_id - definitely a spread (same order)
+            pass
+        elif len(order_ids) > 1:
+            # Multiple order_ids - only a spread if ALL are explicit openings
+            # (IBKR assigns different order_ids per leg for spread orders)
+            if not all_opening:
+                return False
+        else:
+            # No order_ids - only accept if all are explicit openings
+            if not all_opening:
+                return False
+
+        # Calculate total quantities per side
+        buy_qty = sum(e.quantity for e in buys)
+        sell_qty = sum(e.quantity for e in sells)
+
+        # Quantities should be roughly equal for a spread
+        if buy_qty == 0 or sell_qty == 0:
+            return False
+
+        qty_ratio = min(buy_qty, sell_qty) / max(buy_qty, sell_qty)
+        if qty_ratio < 0.9:
+            return False
+
+        return True
 
     def _split_by_expiration(self, executions: list[Execution]) -> list[list[Execution]]:
         """Split executions into groups based on expiration clusters.

@@ -1090,7 +1090,8 @@ export default function TradesPage() {
     .filter((t: any) => t.realized_pnl)
     .reduce((sum: number, trade: any) => sum + (parseFloat(trade.realized_pnl) || 0), 0);
 
-  const closedTrades = trades.filter((t: any) => t.status === 'CLOSED').length;
+  // EXPIRED trades are closed (option expired worthless), so include them in closed count
+  const closedTrades = trades.filter((t: any) => t.status === 'CLOSED' || t.status === 'EXPIRED').length;
   const openTrades = trades.filter((t: any) => t.status === 'OPEN').length;
 
   if (loading) {

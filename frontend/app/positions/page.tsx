@@ -29,6 +29,8 @@ interface OpenTrade {
   total_commission: string;
   is_roll: boolean;
   is_assignment: boolean;
+  wash_sale_adjustment?: string;
+  wash_sale_from_trade_ids?: string;
 }
 
 interface TradeExecution {
@@ -913,18 +915,25 @@ export default function PositionsPage() {
                   // Stock trades don't have a 100x multiplier
                   const isStockTrade = trade.strategy_type?.toLowerCase().includes('stock');
 
-                  // For stocks, calculate net position (buys - sells)
-                  // For options/combos, use min across legs (for spread size)
+                  // For stocks and single-leg options: calculate net position (buys - sells)
+                  // For multi-leg options (spreads): use min across legs (for spread size)
                   let rawQty = 0;
-                  if (isStockTrade && aggregated.length > 0) {
-                    // Net position for stocks: sum of buys minus sum of sells
-                    rawQty = aggregated.reduce((net, g) => {
-                      const isBuy = g.action.includes('BTO') || g.action.includes('BTC') || g.action === 'BUY';
-                      return net + (isBuy ? g.totalQuantity : -g.totalQuantity);
-                    }, 0);
-                    rawQty = Math.abs(rawQty); // Show absolute value
-                  } else if (aggregated.length > 0) {
-                    rawQty = Math.min(...aggregated.map(g => g.totalQuantity));
+                  if (aggregated.length > 0) {
+                    // Count unique strikes to determine if spread or single-leg
+                    const uniqueStrikes = [...new Set(aggregated.map(g => g.strike).filter(s => s))];
+                    const isMultiLeg = uniqueStrikes.length > 1;
+
+                    if (isStockTrade || !isMultiLeg) {
+                      // Net position for stocks and single-leg options: sum of buys minus sum of sells
+                      rawQty = aggregated.reduce((net, g) => {
+                        const isBuy = g.action.includes('BTO') || g.action.includes('BTC') || g.action === 'BUY';
+                        return net + (isBuy ? g.totalQuantity : -g.totalQuantity);
+                      }, 0);
+                      rawQty = Math.abs(rawQty); // Show absolute value
+                    } else {
+                      // Spread position: use min across legs (for spread size)
+                      rawQty = Math.min(...aggregated.map(g => g.totalQuantity));
+                    }
                   }
                   const priceMultiplier = isStockTrade ? 1 : 100;
 
@@ -935,9 +944,12 @@ export default function PositionsPage() {
 
                   const totalComm = aggregated.reduce((sum, g) => sum + g.totalCommission, 0);
 
-                  // Avg Price includes commission per share/contract
+                  // Wash sale adjustment (IRS rule: disallowed loss added to cost basis)
+                  const washSaleAdjustment = parseFloat(trade.wash_sale_adjustment || '0');
+
+                  // Avg Price includes commission and wash sale adjustment per share/contract
                   const rawAvgPrice = rawQty > 0
-                    ? (parseFloat(trade.opening_cost) + totalComm) / rawQty / priceMultiplier
+                    ? (parseFloat(trade.opening_cost) + totalComm + washSaleAdjustment) / rawQty / priceMultiplier
                     : 0;
 
                   const avgPrice = isStockTrade
@@ -989,6 +1001,11 @@ export default function PositionsPage() {
                             {trade.is_roll && !trade.is_assignment && (
                               <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded">
                                 ROLL
+                              </span>
+                            )}
+                            {washSaleAdjustment > 0 && (
+                              <span className="ml-2 px-1.5 py-0.5 text-xs bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300 rounded" title={`Wash sale adjustment: $${washSaleAdjustment.toFixed(2)}`}>
+                                WS
                               </span>
                             )}
                           </>

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from trading_journal.models.execution import Execution
 from trading_journal.models.trade import Trade
 from trading_journal.services.position_state_machine import (
+    LegPosition,
     PositionStateMachine,
     TradeGroup,
     classify_strategy_from_opening,
@@ -167,9 +168,10 @@ class TradeGroupingService:
             "trades_updated": 0,
         }
 
-        # Fetch executions (excluding forex/cash)
+        # Fetch executions (excluding forex/cash/combo bags)
+        # BAG = IBKR combo order net debit/credit (individual legs are separate executions)
         stmt = select(Execution).where(
-            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            Execution.security_type.notin_(["CASH", "FOREX", "FX", "BAG"]),
             ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
         ).order_by(
             Execution.execution_time,
@@ -717,11 +719,204 @@ class TradeGroupingService:
         await self.session.flush()
         return trade
 
+    async def _process_underlying_with_existing_trades(
+        self, underlying: str, new_executions: list[Execution]
+    ) -> tuple[int, int, int]:
+        """Process new executions for an underlying, loading existing open trades first.
+
+        This method:
+        1. Loads existing OPEN trades for the underlying from the database
+        2. Initializes the state machine with those trades' positions
+        3. Processes new executions, matching closes to existing trades
+        4. Updates existing trades that received closing executions
+        5. Creates new trades for new positions
+
+        Args:
+            underlying: The underlying symbol
+            new_executions: List of new executions to process
+
+        Returns:
+            Tuple of (trades_updated, trades_created, trades_closed)
+        """
+        trades_updated = 0
+        trades_created = 0
+        trades_closed = 0
+
+        # Load existing OPEN trades for this underlying with their executions
+        from sqlalchemy.orm import selectinload
+        stmt = select(Trade).where(
+            Trade.underlying == underlying,
+            Trade.status == "OPEN",
+        ).options(selectinload(Trade.executions))
+
+        result = await self.session.execute(stmt)
+        existing_open_trades = list(result.scalars().all())
+
+        if not existing_open_trades:
+            # No existing open trades - process normally
+            state_machine = PositionStateMachine(underlying)
+            trade_groups = state_machine.process_executions(new_executions)
+
+            for group in trade_groups:
+                trade = await self._create_trade_from_group(group)
+                if trade:
+                    trades_created += 1
+            return trades_updated, trades_created, trades_closed
+
+        # Build a mapping of leg_key sets to existing trades
+        # and initialize cumulative position from existing trade executions
+        state_machine = PositionStateMachine(underlying)
+
+        for existing_trade in existing_open_trades:
+            # Get leg keys from existing trade's executions
+            leg_keys = set()
+            for exec in existing_trade.executions:
+                leg_key = state_machine.get_leg_key(exec)
+                leg_keys.add(leg_key)
+
+            # Create a TradeGroup to represent the existing trade
+            trade_group = TradeGroup(underlying=underlying)
+            trade_group.status = "OPEN"
+
+            # Add all existing executions to the trade group
+            for exec in existing_trade.executions:
+                trade_group.add_execution(exec)
+                leg_key = state_machine.get_leg_key(exec)
+                # Calculate opening position from open executions
+                if exec.open_close_indicator == 'O':
+                    delta = int(exec.quantity) if exec.side == "BOT" else -int(exec.quantity)
+                    trade_group.opening_position[leg_key] = (
+                        trade_group.opening_position.get(leg_key, 0) + delta
+                    )
+
+            # Store reference to the DB trade for later updates
+            trade_group.db_trade_id = existing_trade.id
+
+            # Add to state machine's open trades
+            frozen_legs = frozenset(leg_keys) if leg_keys else frozenset(["unknown"])
+            state_machine.open_trades[frozen_legs] = trade_group
+
+            # Initialize cumulative position from existing trade executions
+            for exec in existing_trade.executions:
+                leg_key = state_machine.get_leg_key(exec)
+                if leg_key not in state_machine.position:
+                    state_machine.position[leg_key] = LegPosition(leg_key=leg_key)
+                delta = int(exec.quantity) if exec.side == "BOT" else -int(exec.quantity)
+                # For closes, delta reduces position toward zero
+                if exec.open_close_indicator == 'C':
+                    current = state_machine.position[leg_key].quantity
+                    if current > 0:
+                        state_machine.position[leg_key].quantity = max(0, current + delta)
+                    elif current < 0:
+                        state_machine.position[leg_key].quantity = min(0, current + delta)
+                else:
+                    state_machine.position[leg_key].quantity += delta
+
+        # Now process new executions - the state machine knows about existing trades
+        trade_groups = state_machine.process_executions(new_executions)
+
+        # Process results - some may be updates to existing trades, some new
+        for group in trade_groups:
+            # Check if this group has a reference to an existing DB trade
+            db_trade_id = getattr(group, 'db_trade_id', None)
+
+            if db_trade_id:
+                # Update existing trade with new executions
+                existing_trade = await self.session.get(Trade, db_trade_id)
+                if existing_trade:
+                    # Add new executions to the existing trade
+                    new_exec_count = 0
+                    for exec in group.executions:
+                        if exec.trade_id is None:
+                            exec.trade_id = db_trade_id
+                            new_exec_count += 1
+
+                    if new_exec_count > 0:
+                        # Recalculate trade fields based on all executions
+                        await self._update_trade_from_executions(existing_trade, group)
+                        trades_updated += 1
+
+                        if group.status == "CLOSED":
+                            trades_closed += 1
+            else:
+                # New trade - only if it has new executions
+                has_new_execs = any(e.trade_id is None for e in group.executions)
+                if has_new_execs:
+                    trade = await self._create_trade_from_group(group)
+                    if trade:
+                        trades_created += 1
+                        if group.status == "CLOSED":
+                            trades_closed += 1
+
+        return trades_updated, trades_created, trades_closed
+
+    async def _update_trade_from_executions(
+        self, trade: Trade, group: TradeGroup
+    ) -> None:
+        """Update an existing trade's calculated fields after adding new executions.
+
+        Args:
+            trade: The existing Trade model to update
+            group: The TradeGroup with all executions (existing + new)
+        """
+        executions = group.executions
+
+        # Recalculate all fields
+        trade.status = group.status
+        trade.num_executions = len(executions)
+
+        # Get unique legs
+        legs = set()
+        for e in executions:
+            if e.security_type == "OPT":
+                legs.add(f"{e.strike}_{e.option_type}_{e.expiration}")
+            else:
+                legs.add("STK")
+        trade.num_legs = len(legs)
+
+        # Calculate quantity from opening executions
+        opening_qty = sum(
+            int(e.quantity) for e in executions if e.open_close_indicator == 'O'
+        )
+        trade.quantity = opening_qty or sum(int(e.quantity) for e in executions) // 2
+
+        # Timestamps
+        trade.opened_at = min(e.execution_time for e in executions)
+        if group.status == "CLOSED":
+            trade.closed_at = max(e.execution_time for e in executions)
+
+        # Calculate strikes
+        strikes = sorted([float(e.strike) for e in executions if e.strike])
+        if strikes:
+            trade.strike_low = strikes[0]
+            trade.strike_high = strikes[-1] if len(strikes) > 1 else None
+
+        # Expiration
+        expirations = [e.expiration for e in executions if e.expiration]
+        if expirations:
+            trade.expiration = min(expirations)
+
+        # P&L calculation for closed trades
+        if group.status == "CLOSED":
+            total_commission = sum(e.commission or 0 for e in executions)
+            opening_cost = sum(
+                abs(e.net_amount) for e in executions if e.side == "BOT"
+            )
+            closing_proceeds = sum(
+                abs(e.net_amount) for e in executions if e.side == "SLD"
+            )
+            trade.realized_pnl = closing_proceeds - opening_cost - total_commission
+            trade.commission = total_commission
+
     async def process_new_executions(self) -> dict:
         """Process only unassigned executions into trades.
 
         This method processes executions that have trade_id = NULL,
-        creating new trades without affecting existing ones.
+        creating new trades or adding to existing ones.
+
+        IMPORTANT: Before processing new executions for each underlying,
+        we load existing OPEN trades to properly match closing executions
+        to their corresponding opening trades.
 
         Returns:
             Dict with processing statistics
@@ -730,12 +925,13 @@ class TradeGroupingService:
             "executions_processed": 0,
             "trades_created": 0,
             "trades_updated": 0,
+            "trades_closed": 0,
         }
 
-        # Fetch only unassigned executions (trade_id IS NULL), excluding forex/cash
+        # Fetch only unassigned executions (trade_id IS NULL), excluding forex/cash/bags
         stmt = select(Execution).where(
             Execution.trade_id.is_(None),
-            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            Execution.security_type.notin_(["CASH", "FOREX", "FX", "BAG"]),
             ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
         ).order_by(
             Execution.execution_time,
@@ -754,15 +950,14 @@ class TradeGroupingService:
         for exec in executions:
             by_underlying[exec.underlying].append(exec)
 
-        # Process each underlying with position state machine
-        for underlying, execs in by_underlying.items():
-            state_machine = PositionStateMachine(underlying)
-            trade_groups = state_machine.process_executions(execs)
-
-            for group in trade_groups:
-                trade = await self._create_trade_from_group(group)
-                if trade:
-                    stats["trades_created"] += 1
+        # Process each underlying - load existing open trades first
+        for underlying, new_execs in by_underlying.items():
+            updated, created, closed = await self._process_underlying_with_existing_trades(
+                underlying, new_execs
+            )
+            stats["trades_updated"] += updated
+            stats["trades_created"] += created
+            stats["trades_closed"] += closed
 
         await self.session.commit()
 
@@ -835,10 +1030,10 @@ class TradeGroupingService:
         currency_excluded = await self._exclude_currency_conversions()
         stats["currency_conversions_excluded"] = currency_excluded
 
-        # Step 5: Get tradeable executions (excluding forex/cash/currency pairs)
+        # Step 5: Get tradeable executions (excluding forex/cash/currency pairs/bags)
         stmt = select(Execution).where(
             Execution.trade_id.is_(None),  # Not already assigned
-            Execution.security_type.notin_(["CASH", "FOREX", "FX"]),
+            Execution.security_type.notin_(["CASH", "FOREX", "FX", "BAG"]),
             ~Execution.underlying.contains("."),  # Exclude currency pairs like USD.ILS
         )
         result = await self.session.execute(stmt)
@@ -1514,7 +1709,10 @@ class TradeGroupingService:
                 tag_result = await self.session.execute(tag_stmt)
                 tags = list(tag_result.scalars().all())
 
-                # Add tags to trade
+                # Add tags to trade - need to eagerly load the relationship first
+                # to avoid async context errors with lazy loading
+                from sqlalchemy.orm import selectinload
+                await self.session.refresh(trade, ["tag_list"])
                 trade.tag_list.extend(tags)
                 restored_count += 1
 

@@ -38,7 +38,8 @@ class AnalyticsService:
         Returns:
             Dictionary with win rate statistics
         """
-        stmt = select(Trade).where(Trade.status == "CLOSED")
+        # Include both CLOSED and EXPIRED trades (expired = option expired worthless)
+        stmt = select(Trade).where(Trade.status.in_(["CLOSED", "EXPIRED"]))
 
         if underlying:
             stmt = stmt.where(Trade.underlying == underlying)
@@ -119,7 +120,8 @@ class AnalyticsService:
         Returns:
             List of strategy statistics
         """
-        stmt = select(Trade).where(Trade.status == "CLOSED")
+        # Include both CLOSED and EXPIRED trades (expired = option expired worthless)
+        stmt = select(Trade).where(Trade.status.in_(["CLOSED", "EXPIRED"]))
 
         if underlying:
             stmt = stmt.where(Trade.underlying == underlying)
@@ -180,7 +182,8 @@ class AnalyticsService:
         Returns:
             List of underlying statistics
         """
-        stmt = select(Trade).where(Trade.status == "CLOSED")
+        # Include both CLOSED and EXPIRED trades (expired = option expired worthless)
+        stmt = select(Trade).where(Trade.status.in_(["CLOSED", "EXPIRED"]))
 
         if strategy_type:
             stmt = stmt.where(Trade.strategy_type == strategy_type)
@@ -241,7 +244,8 @@ class AnalyticsService:
         Returns:
             List of monthly statistics
         """
-        stmt = select(Trade).where(Trade.status == "CLOSED", Trade.closed_at.isnot(None))
+        # Include both CLOSED and EXPIRED trades
+        stmt = select(Trade).where(Trade.status.in_(["CLOSED", "EXPIRED"]), Trade.closed_at.isnot(None))
 
         if underlying:
             stmt = stmt.where(Trade.underlying == underlying)
@@ -303,8 +307,9 @@ class AnalyticsService:
         Returns:
             Dictionary with duration statistics
         """
+        # Include both CLOSED and EXPIRED trades
         stmt = select(Trade).where(
-            Trade.status == "CLOSED",
+            Trade.status.in_(["CLOSED", "EXPIRED"]),
             Trade.closed_at.isnot(None)
         )
 
