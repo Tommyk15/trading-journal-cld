@@ -129,13 +129,21 @@ class PerformanceMetricsService:
             day_pnl = sum(t.realized_pnl for t in day_trades)
             cumulative_pnl += day_pnl
 
+            # Calculate win/loss amounts for the day
+            winners = [t for t in day_trades if t.realized_pnl > 0]
+            losers = [t for t in day_trades if t.realized_pnl < 0]
+            win_amount = sum(t.realized_pnl for t in winners)
+            loss_amount = abs(sum(t.realized_pnl for t in losers))
+
             daily_data.append({
                 "date": date_key,
                 "trades_count": len(day_trades),
                 "daily_pnl": day_pnl,
                 "cumulative_pnl": cumulative_pnl,
-                "winning_trades": len([t for t in day_trades if t.realized_pnl > 0]),
-                "losing_trades": len([t for t in day_trades if t.realized_pnl < 0]),
+                "winning_trades": len(winners),
+                "losing_trades": len(losers),
+                "win_amount": win_amount,
+                "loss_amount": loss_amount,
             })
 
         return daily_data

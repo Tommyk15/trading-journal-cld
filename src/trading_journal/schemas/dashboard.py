@@ -86,6 +86,8 @@ class MetricsTimePoint(BaseModel):
     win_rate: float = Field(..., description="Rolling win rate up to this date")
     profit_factor: float | None = Field(None, description="Rolling profit factor up to this date")
     drawdown_percent: float = Field(..., description="Drawdown percentage at this date")
+    avg_winner: Decimal | None = Field(None, description="Rolling average winner up to this date")
+    avg_loser: Decimal | None = Field(None, description="Rolling average loser up to this date")
 
 
 class MetricsTimeSeriesResponse(BaseModel):

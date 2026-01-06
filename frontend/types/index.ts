@@ -371,6 +371,8 @@ export interface MetricsTimePoint {
   win_rate: number;
   profit_factor: number | null;
   drawdown_percent: number;
+  avg_winner: number | null;
+  avg_loser: number | null;
 }
 
 export interface MetricsTimeSeriesResponse {

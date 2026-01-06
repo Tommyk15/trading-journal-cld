@@ -273,12 +273,16 @@ class DashboardService:
         data_points = []
         cumulative_wins = 0
         cumulative_losses = 0
+        cumulative_win_amount = Decimal("0.00")
+        cumulative_loss_amount = Decimal("0.00")
         peak_equity = Decimal("0.00")
 
         for day in daily_pnl:
             cumulative_pnl = day["cumulative_pnl"]
             cumulative_wins += day["winning_trades"]
             cumulative_losses += day["losing_trades"]
+            cumulative_win_amount += day.get("win_amount", Decimal("0.00"))
+            cumulative_loss_amount += day.get("loss_amount", Decimal("0.00"))
             total_trades = cumulative_wins + cumulative_losses
 
             # Calculate rolling win rate
@@ -292,9 +296,14 @@ class DashboardService:
             drawdown = peak_equity - cumulative_pnl if peak_equity > 0 else Decimal("0.00")
             drawdown_pct = float(drawdown / peak_equity * 100) if peak_equity > 0 else 0.0
 
-            # Profit factor is not available in time series
-            # (would require tracking cumulative win/loss amounts separately)
+            # Calculate rolling profit factor
             profit_factor = None
+            if cumulative_loss_amount > 0:
+                profit_factor = float(cumulative_win_amount / cumulative_loss_amount)
+
+            # Calculate rolling avg winner and avg loser
+            avg_winner = cumulative_win_amount / cumulative_wins if cumulative_wins > 0 else None
+            avg_loser = cumulative_loss_amount / cumulative_losses if cumulative_losses > 0 else None
 
             data_points.append(MetricsTimePoint(
                 date=day["date"],
@@ -303,6 +312,8 @@ class DashboardService:
                 win_rate=win_rate,
                 profit_factor=profit_factor,
                 drawdown_percent=drawdown_pct,
+                avg_winner=avg_winner,
+                avg_loser=avg_loser,
             ))
 
         return MetricsTimeSeriesResponse(

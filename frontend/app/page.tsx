@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { api } from '@/lib/api/client';
 import {
   TimePeriodSelector,
@@ -47,6 +47,82 @@ export default function Dashboard() {
     fetchData();
   }, [period]);
 
+  // Extract sparkline data and period changes from time series
+  const sparklineData = useMemo(() => {
+    if (!timeSeries?.data_points || timeSeries.data_points.length === 0) {
+      return {
+        pnl: [],
+        tradeCount: [],
+        winRate: [],
+        profitFactor: [],
+        drawdown: [],
+        avgWinner: [],
+        avgLoser: [],
+        pnlChange: undefined,
+        tradeCountChange: undefined,
+        winRateChange: undefined,
+        profitFactorChange: undefined,
+        drawdownChange: undefined,
+        avgWinnerChange: undefined,
+        avgLoserChange: undefined,
+      };
+    }
+
+    const points = timeSeries.data_points;
+    const first = points[0];
+    const last = points[points.length - 1];
+
+    // Filter out null values for avg winner/loser
+    const avgWinnerPoints = points.filter((p) => p.avg_winner !== null);
+    const avgLoserPoints = points.filter((p) => p.avg_loser !== null);
+
+    return {
+      pnl: points.map((p) => p.cumulative_pnl),
+      tradeCount: points.map((p) => p.trade_count),
+      winRate: points.map((p) => p.win_rate),
+      profitFactor: points.map((p) => p.profit_factor ?? 0),
+      drawdown: points.map((p) => p.drawdown_percent),
+      avgWinner: avgWinnerPoints.map((p) => p.avg_winner as number),
+      avgLoser: avgLoserPoints.map((p) => p.avg_loser as number),
+      pnlChange: last.cumulative_pnl - first.cumulative_pnl,
+      tradeCountChange: last.trade_count - first.trade_count,
+      winRateChange: last.win_rate - first.win_rate,
+      profitFactorChange:
+        last.profit_factor !== null && first.profit_factor !== null
+          ? last.profit_factor - first.profit_factor
+          : undefined,
+      drawdownChange: last.drawdown_percent - first.drawdown_percent,
+      avgWinnerChange:
+        avgWinnerPoints.length >= 2
+          ? (avgWinnerPoints[avgWinnerPoints.length - 1].avg_winner as number) -
+            (avgWinnerPoints[0].avg_winner as number)
+          : undefined,
+      avgLoserChange:
+        avgLoserPoints.length >= 2
+          ? (avgLoserPoints[avgLoserPoints.length - 1].avg_loser as number) -
+            (avgLoserPoints[0].avg_loser as number)
+          : undefined,
+    };
+  }, [timeSeries]);
+
+  // Calculate trades per week
+  const tradesPerWeek = useMemo(() => {
+    if (!timeSeries?.data_points || timeSeries.data_points.length === 0 || !summary?.total_trades) {
+      return null;
+    }
+
+    // Calculate number of weeks in the period
+    const startDate = timeSeries.start_date ? new Date(timeSeries.start_date) : null;
+    const endDate = timeSeries.end_date ? new Date(timeSeries.end_date) : null;
+
+    if (!startDate || !endDate) return null;
+
+    const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+    const weeks = Math.max(1, (endDate.getTime() - startDate.getTime()) / msPerWeek);
+
+    return (summary.total_trades / weeks).toFixed(1);
+  }, [timeSeries, summary]);
+
   // Loading skeleton
   if (loading) {
     return (
@@ -90,22 +166,6 @@ export default function Dashboard() {
     );
   }
 
-  // Determine trends based on values
-  const getPnlTrend = () => {
-    if (!summary) return 'neutral';
-    return summary.total_pnl > 0 ? 'up' : summary.total_pnl < 0 ? 'down' : 'neutral';
-  };
-
-  const getWinRateTrend = () => {
-    if (!summary) return 'neutral';
-    return summary.win_rate >= 50 ? 'up' : 'down';
-  };
-
-  const getProfitFactorTrend = () => {
-    if (!summary || !summary.profit_factor) return 'neutral';
-    return summary.profit_factor >= 1 ? 'up' : 'down';
-  };
-
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
       <div className="p-6 space-y-6">
@@ -120,41 +180,56 @@ export default function Dashboard() {
             title="Total P&L"
             value={summary?.total_pnl ?? 0}
             format="currency"
-            trend={getPnlTrend() as 'up' | 'down' | 'neutral'}
+            sparklineData={sparklineData.pnl}
+            periodChange={sparklineData.pnlChange}
+            showScale
             tooltip="Net profit or loss across all closed trades for the selected period."
           />
           <MetricCard
             title="Total Trades"
             value={summary?.total_trades ?? 0}
             format="number"
+            sparklineData={sparklineData.tradeCount}
+            periodChange={sparklineData.tradeCountChange}
+            showScale
+            subtitle={tradesPerWeek ? `${tradesPerWeek} trades/week` : undefined}
             tooltip="Total number of closed trades in the selected period."
           />
           <MetricCard
             title="Win Rate"
             value={summary?.win_rate ?? 0}
             format="percent"
-            trend={getWinRateTrend() as 'up' | 'down' | 'neutral'}
+            sparklineData={sparklineData.winRate}
+            periodChange={sparklineData.winRateChange}
+            showScale
             tooltip="Percentage of trades that were profitable. A rate above 50% means more winners than losers."
           />
           <MetricCard
             title="Avg Winner"
             value={summary?.avg_winner ?? 0}
             format="currency"
-            trend="up"
+            sparklineData={sparklineData.avgWinner}
+            periodChange={sparklineData.avgWinnerChange}
+            showScale
             tooltip="Average profit on winning trades. Higher is better."
           />
           <MetricCard
             title="Avg Loser"
             value={summary?.avg_loser ?? 0}
             format="currency"
-            trend="down"
+            sparklineData={sparklineData.avgLoser}
+            periodChange={sparklineData.avgLoserChange}
+            showScale
+            invertColors
             tooltip="Average loss on losing trades. Lower absolute value is better."
           />
           <MetricCard
             title="Profit Factor"
             value={summary?.profit_factor}
             format="ratio"
-            trend={getProfitFactorTrend() as 'up' | 'down' | 'neutral'}
+            sparklineData={sparklineData.profitFactor}
+            periodChange={sparklineData.profitFactorChange}
+            showScale
             tooltip="Gross profits divided by gross losses. Above 1.0 means profitable overall. Above 2.0 is excellent."
           />
         </div>
@@ -165,7 +240,10 @@ export default function Dashboard() {
             title="Max Drawdown"
             value={summary?.max_drawdown_percent ?? 0}
             format="percent"
-            trend="down"
+            sparklineData={sparklineData.drawdown}
+            periodChange={sparklineData.drawdownChange}
+            showScale
+            invertColors
             tooltip="Largest peak-to-trough decline in portfolio value. Lower is better for risk management."
           />
           <MetricCard
@@ -179,14 +257,12 @@ export default function Dashboard() {
             title="Sharpe Ratio"
             value={summary?.sharpe_ratio}
             format="ratio"
-            trend={summary?.sharpe_ratio && summary.sharpe_ratio > 0 ? 'up' : 'neutral'}
             tooltip="Risk-adjusted return vs risk-free rate. Above 1 is good, above 2 is excellent, above 3 is outstanding."
           />
           <MetricCard
             title="Sortino Ratio"
             value={summary?.sortino_ratio}
             format="ratio"
-            trend={summary?.sortino_ratio && summary.sortino_ratio > 0 ? 'up' : 'neutral'}
             tooltip="Like Sharpe but only penalizes downside volatility. Higher is better. More relevant for asymmetric returns."
           />
         </div>
