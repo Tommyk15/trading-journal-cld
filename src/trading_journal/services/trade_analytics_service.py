@@ -208,14 +208,26 @@ class TradeAnalyticsService:
         # Calculate d2 (probability that S > K at expiration)
         d2 = (math.log(S / K) + (r - 0.5 * sigma**2) * t) / (sigma * math.sqrt(t))
 
+        # norm.cdf(d2) ≈ P(S_T > breakeven)
+        prob_above = norm.cdf(d2) * 100
+        prob_below = 100 - prob_above
+
         if is_credit:
-            # Credit spread: profit if underlying stays above/below breakeven
-            # For put credit spread: profit if S > breakeven
-            # For call credit spread: profit if S < breakeven
-            pop = norm.cdf(d2) * 100
+            # Credit strategies: profit if price stays away from breakeven
+            # If breakeven > current price: profit if S < breakeven (short call)
+            # If breakeven < current price: profit if S > breakeven (short put)
+            if K > S:
+                pop = prob_below  # Short call: profit if stock stays below breakeven
+            else:
+                pop = prob_above  # Short put: profit if stock stays above breakeven
         else:
-            # Debit spread: profit if underlying moves past breakeven
-            pop = (1 - norm.cdf(d2)) * 100
+            # Debit strategies: profit if price moves past breakeven
+            # If breakeven > current price: profit if S > breakeven (long call)
+            # If breakeven < current price: profit if S < breakeven (long put)
+            if K > S:
+                pop = prob_above  # Long call: profit if stock rises above breakeven
+            else:
+                pop = prob_below  # Long put: profit if stock falls below breakeven
 
         return Decimal(str(round(pop, 2)))
 
@@ -1043,8 +1055,12 @@ class TradeAnalyticsService:
             if exec.security_type != "OPT":
                 continue
 
-            # Only count opening transactions for premium
-            if exec.open_close_indicator == "O":
+            # Count opening transactions for premium
+            # Include both "O" and None (infer as opening if not explicitly "C")
+            is_opening = exec.open_close_indicator == "O" or (
+                exec.open_close_indicator is None and exec.open_close_indicator != "C"
+            )
+            if is_opening:
                 qty = abs(Decimal(str(exec.quantity)))
                 premium_per_share = Decimal(str(exec.price))
 

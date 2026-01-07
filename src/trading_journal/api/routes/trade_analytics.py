@@ -764,11 +764,16 @@ async def fetch_trade_greeks(
         trade.greeks_pending = False
 
         # Calculate net premium from executions
+        # Include executions with open_close_indicator = "O" or None (infer as opening)
+        # For CLOSED trades, also include None since it might be an opening without tag
         net_premium = Decimal("0")
         total_contracts = Decimal("0")
         unique_strikes = set()
         for exec in executions:
-            if exec.security_type == "OPT" and exec.open_close_indicator == "O":
+            is_opening = exec.open_close_indicator == "O" or (
+                exec.open_close_indicator is None and exec.open_close_indicator != "C"
+            )
+            if exec.security_type == "OPT" and is_opening:
                 qty = abs(Decimal(str(exec.quantity)))
                 premium_per_share = Decimal(str(exec.price))
                 if exec.side == "SLD":
