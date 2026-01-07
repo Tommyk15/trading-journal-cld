@@ -315,6 +315,7 @@ async def get_account_pnl(
 @router.get("/positions", response_model=PositionsMarketDataResponse)
 async def get_positions_market_data(
     force_refresh: bool = Query(False, description="Force refresh from live sources"),
+    include_greeks: bool = Query(False, description="Fetch Greeks for options (slower)"),
     session: AsyncSession = Depends(get_db),
     service: MarketDataService = Depends(get_market_data_service),
 ):
@@ -326,6 +327,7 @@ async def get_positions_market_data(
 
     Args:
         force_refresh: If True, bypass cache and fetch fresh data
+        include_greeks: If True, fetch Greeks for each option (can be slow due to rate limits)
         session: Database session
 
     Returns:
@@ -370,7 +372,9 @@ async def get_positions_market_data(
     total_market_value = Decimal("0")
     total_cost_basis = Decimal("0")
     total_delta = Decimal("0")
+    total_gamma = Decimal("0")
     total_theta = Decimal("0")
+    total_vega = Decimal("0")
     primary_source = "IBKR" if ibkr_connected else "UNAVAILABLE"
     all_fresh = True
     any_data = False
@@ -499,6 +503,11 @@ async def get_positions_market_data(
         matched_legs = []
         all_legs_matched = True
 
+        trade_delta = Decimal("0")
+        trade_gamma = Decimal("0")
+        trade_theta = Decimal("0")
+        trade_vega = Decimal("0")
+
         for leg in legs:
             if leg.get("security_type") == "STK":
                 ibkr_key = f"{trade.underlying}_STK"
@@ -506,6 +515,48 @@ async def get_positions_market_data(
                 ibkr_key = f"{trade.underlying}_{leg['expiration']}_{leg['strike']}_{leg['option_type']}"
 
             ibkr_pos = ibkr_by_key.get(ibkr_key)
+
+            leg_delta = None
+            leg_gamma = None
+            leg_theta = None
+            leg_vega = None
+            leg_iv = None
+
+            # Fetch greeks for option legs (with timeout to avoid blocking)
+            if include_greeks and leg.get("security_type") == "OPT" and leg.get("expiration") and leg.get("strike"):
+                try:
+                    exp_date = datetime.strptime(leg["expiration"], "%Y%m%d")
+                    # Add timeout to prevent hanging on rate limits
+                    _, greeks = await asyncio.wait_for(
+                        service.get_option_data(
+                            underlying=trade.underlying,
+                            expiration=exp_date,
+                            strike=Decimal(str(leg["strike"])),
+                            option_type=leg["option_type"],
+                        ),
+                        timeout=5.0  # 5 second timeout per option
+                    )
+                    if greeks:
+                        multiplier = leg.get("multiplier", 100)
+                        quantity = leg["quantity"]
+                        if greeks.delta:
+                            leg_delta = float(greeks.delta)
+                            trade_delta += Decimal(str(greeks.delta)) * quantity * multiplier
+                        if greeks.gamma:
+                            leg_gamma = float(greeks.gamma)
+                            trade_gamma += Decimal(str(greeks.gamma)) * quantity * multiplier
+                        if greeks.theta:
+                            leg_theta = float(greeks.theta)
+                            trade_theta += Decimal(str(greeks.theta)) * quantity * multiplier
+                        if greeks.vega:
+                            leg_vega = float(greeks.vega)
+                            trade_vega += Decimal(str(greeks.vega)) * quantity * multiplier
+                        if greeks.iv:
+                            leg_iv = float(greeks.iv)
+                except asyncio.TimeoutError:
+                    logging.debug(f"Timeout fetching greeks for {trade.underlying} leg")
+                except Exception as e:
+                    logging.debug(f"Could not fetch greeks for {trade.underlying} leg: {e}")
 
             if ibkr_pos:
                 market_value = Decimal(str(ibkr_pos.get("market_value", 0)))
@@ -523,11 +574,11 @@ async def get_positions_market_data(
                     "quantity": leg["quantity"],
                     "price": market_price,
                     "market_value": float(market_value),
-                    "delta": None,  # Not available from portfolio
-                    "gamma": None,
-                    "theta": None,
-                    "vega": None,
-                    "iv": None,
+                    "delta": leg_delta,
+                    "gamma": leg_gamma,
+                    "theta": leg_theta,
+                    "vega": leg_vega,
+                    "iv": leg_iv,
                     "source": "IBKR",
                 })
                 any_data = True
@@ -541,11 +592,11 @@ async def get_positions_market_data(
                     "quantity": leg["quantity"],
                     "price": None,
                     "market_value": None,
-                    "delta": None,
-                    "gamma": None,
-                    "theta": None,
-                    "vega": None,
-                    "iv": None,
+                    "delta": leg_delta,
+                    "gamma": leg_gamma,
+                    "theta": leg_theta,
+                    "vega": leg_vega,
+                    "iv": leg_iv,
                     "source": "UNAVAILABLE",
                 })
 
@@ -567,10 +618,10 @@ async def get_positions_market_data(
             total_cost_basis=float(cost_basis),
             unrealized_pnl=float(trade_unrealized_pnl) if all_legs_matched else None,
             unrealized_pnl_percent=unrealized_pnl_percent,
-            net_delta=None,
-            net_gamma=None,
-            net_theta=None,
-            net_vega=None,
+            net_delta=float(trade_delta) if trade_delta else None,
+            net_gamma=float(trade_gamma) if trade_gamma else None,
+            net_theta=float(trade_theta) if trade_theta else None,
+            net_vega=float(trade_vega) if trade_vega else None,
             source="IBKR" if all_legs_matched else "UNAVAILABLE",
             timestamp=datetime.now(),
             is_stale=not all_legs_matched,
@@ -580,6 +631,10 @@ async def get_positions_market_data(
         if all_legs_matched:
             total_market_value += trade_market_value
         total_cost_basis += cost_basis
+        total_delta += trade_delta
+        total_gamma += trade_gamma
+        total_theta += trade_theta
+        total_vega += trade_vega
 
     # Calculate net unrealized P&L
     net_unrealized_pnl = None
@@ -605,7 +660,9 @@ async def get_positions_market_data(
         total_market_value=float(total_market_value) if any_data else None,
         total_cost_basis=float(total_cost_basis),
         total_delta=float(total_delta) if total_delta else None,
+        total_gamma=float(total_gamma) if total_gamma else None,
         total_theta=float(total_theta) if total_theta else None,
+        total_vega=float(total_vega) if total_vega else None,
         ibkr_connected=ibkr_connected,
         source=primary_source,
         timestamp=datetime.now(),

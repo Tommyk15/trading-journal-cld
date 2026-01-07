@@ -5,6 +5,7 @@ import { api } from '@/lib/api/client';
 import {
   TimePeriodSelector,
   MetricCard,
+  DualMetricCard,
   GreeksPanel,
   BestWorstCard,
   RiskMetricsPanel,
@@ -14,15 +15,18 @@ import type {
   TimePeriod,
   DashboardSummary,
   MetricsTimeSeriesResponse,
+  PortfolioGreeksSummary,
 } from '@/types';
 
 export default function Dashboard() {
   const [period, setPeriod] = useState<TimePeriod>('all');
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [timeSeries, setTimeSeries] = useState<MetricsTimeSeriesResponse | null>(null);
+  const [portfolioGreeks, setPortfolioGreeks] = useState<PortfolioGreeksSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Main dashboard data fetch
   useEffect(() => {
     async function fetchData() {
       try {
@@ -47,6 +51,32 @@ export default function Dashboard() {
     fetchData();
   }, [period]);
 
+  // Fetch portfolio greeks separately (non-blocking)
+  useEffect(() => {
+    async function fetchGreeks() {
+      try {
+        const marketData = await api.marketData.getPositionsMarketData();
+        if (marketData) {
+          const optionPositionCount = marketData.positions?.filter(p => p.legs?.some(l => l.security_type === 'OPT')).length ?? 0;
+          if (marketData.total_delta || marketData.total_gamma || marketData.total_theta || marketData.total_vega || optionPositionCount > 0) {
+            setPortfolioGreeks({
+              total_delta: marketData.total_delta ?? 0,
+              total_gamma: marketData.total_gamma ?? 0,
+              total_theta: marketData.total_theta ?? 0,
+              total_vega: marketData.total_vega ?? 0,
+              position_count: optionPositionCount,
+              last_updated: marketData.timestamp,
+            });
+          }
+        }
+      } catch (greeksErr) {
+        console.log('Could not fetch portfolio greeks:', greeksErr);
+      }
+    }
+
+    fetchGreeks();
+  }, []); // Only fetch once on mount, not on period change
+
   // Extract sparkline data and period changes from time series
   const sparklineData = useMemo(() => {
     if (!timeSeries?.data_points || timeSeries.data_points.length === 0) {
@@ -58,6 +88,7 @@ export default function Dashboard() {
         drawdown: [],
         avgWinner: [],
         avgLoser: [],
+        dailyPnl: [],
         pnlChange: undefined,
         tradeCountChange: undefined,
         winRateChange: undefined,
@@ -65,6 +96,7 @@ export default function Dashboard() {
         drawdownChange: undefined,
         avgWinnerChange: undefined,
         avgLoserChange: undefined,
+        dailyPnlChange: undefined,
       };
     }
 
@@ -76,6 +108,12 @@ export default function Dashboard() {
     const avgWinnerPoints = points.filter((p) => p.avg_winner !== null);
     const avgLoserPoints = points.filter((p) => p.avg_loser !== null);
 
+    // Calculate daily P&L from cumulative (difference between consecutive days)
+    const dailyPnl = points.map((p, i) => {
+      if (i === 0) return p.cumulative_pnl;
+      return p.cumulative_pnl - points[i - 1].cumulative_pnl;
+    });
+
     return {
       pnl: points.map((p) => p.cumulative_pnl),
       tradeCount: points.map((p) => p.trade_count),
@@ -84,6 +122,7 @@ export default function Dashboard() {
       drawdown: points.map((p) => p.drawdown_percent),
       avgWinner: avgWinnerPoints.map((p) => p.avg_winner as number),
       avgLoser: avgLoserPoints.map((p) => p.avg_loser as number),
+      dailyPnl,
       pnlChange: last.cumulative_pnl - first.cumulative_pnl,
       tradeCountChange: last.trade_count - first.trade_count,
       winRateChange: last.win_rate - first.win_rate,
@@ -101,6 +140,10 @@ export default function Dashboard() {
         avgLoserPoints.length >= 2
           ? (avgLoserPoints[avgLoserPoints.length - 1].avg_loser as number) -
             (avgLoserPoints[0].avg_loser as number)
+          : undefined,
+      dailyPnlChange:
+        dailyPnl.length >= 2
+          ? dailyPnl[dailyPnl.length - 1] - dailyPnl[0]
           : undefined,
     };
   }, [timeSeries]);
@@ -168,18 +211,19 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors">
-      <div className="p-6 space-y-6">
+      <div className="p-4 space-y-3">
         {/* Time Period Selector */}
         <div className="flex justify-end">
           <TimePeriodSelector selected={period} onChange={setPeriod} />
         </div>
 
-        {/* Row 1: Primary Metrics */}
-        <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+        {/* Row 1: Primary Metrics - 6 columns */}
+        <div className="grid gap-2 grid-cols-3 lg:grid-cols-6">
           <MetricCard
             title="Total P&L"
             value={summary?.total_pnl ?? 0}
             format="currency"
+            size="sm"
             sparklineData={sparklineData.pnl}
             periodChange={sparklineData.pnlChange}
             showScale
@@ -189,89 +233,97 @@ export default function Dashboard() {
             title="Total Trades"
             value={summary?.total_trades ?? 0}
             format="number"
+            size="sm"
             sparklineData={sparklineData.tradeCount}
             periodChange={sparklineData.tradeCountChange}
             showScale
-            subtitle={tradesPerWeek ? `${tradesPerWeek} trades/week` : undefined}
+            subtitle={tradesPerWeek ? `${tradesPerWeek}/week` : undefined}
             tooltip="Total number of closed trades in the selected period."
           />
           <MetricCard
             title="Win Rate"
             value={summary?.win_rate ?? 0}
             format="percent"
+            size="sm"
             sparklineData={sparklineData.winRate}
             periodChange={sparklineData.winRateChange}
             showScale
-            tooltip="Percentage of trades that were profitable. A rate above 50% means more winners than losers."
+            tooltip="Percentage of trades that were profitable."
           />
           <MetricCard
             title="Avg Winner"
             value={summary?.avg_winner ?? 0}
             format="currency"
+            size="sm"
             sparklineData={sparklineData.avgWinner}
             periodChange={sparklineData.avgWinnerChange}
             showScale
-            tooltip="Average profit on winning trades. Higher is better."
+            tooltip="Average profit on winning trades."
           />
           <MetricCard
             title="Avg Loser"
             value={summary?.avg_loser ?? 0}
             format="currency"
+            size="sm"
             sparklineData={sparklineData.avgLoser}
             periodChange={sparklineData.avgLoserChange}
             showScale
             invertColors
-            tooltip="Average loss on losing trades. Lower absolute value is better."
+            tooltip="Average loss on losing trades."
           />
           <MetricCard
             title="Profit Factor"
             value={summary?.profit_factor}
             format="ratio"
+            size="sm"
             sparklineData={sparklineData.profitFactor}
             periodChange={sparklineData.profitFactorChange}
             showScale
-            tooltip="Gross profits divided by gross losses. Above 1.0 means profitable overall. Above 2.0 is excellent."
+            tooltip="Gross profits / gross losses. Above 1.0 = profitable."
           />
         </div>
 
-        {/* Row 2: Risk Metrics */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* Row 2: Risk Metrics + Best/Worst + Greeks - 6 columns */}
+        <div className="grid gap-2 grid-cols-3 lg:grid-cols-6">
           <MetricCard
             title="Max Drawdown"
             value={summary?.max_drawdown_percent ?? 0}
             format="percent"
+            size="sm"
             sparklineData={sparklineData.drawdown}
             periodChange={sparklineData.drawdownChange}
             showScale
             invertColors
-            tooltip="Largest peak-to-trough decline in portfolio value. Lower is better for risk management."
+            tooltip="Largest peak-to-trough decline. Lower is better."
           />
           <MetricCard
             title="Avg Profit/Day"
             value={summary?.avg_profit_per_day ?? 0}
             format="currency"
-            subtitle={`${summary?.trading_days ?? 0} trading days`}
-            tooltip="Average daily profit across all trading days. Shows typical daily performance."
+            size="sm"
+            sparklineData={sparklineData.dailyPnl}
+            periodChange={sparklineData.dailyPnlChange}
+            showScale
+            sparklineColorByValue
+            subtitle={`${summary?.trading_days ?? 0} days`}
+            tooltip="Average daily profit across all trading days."
           />
-          <MetricCard
-            title="Sharpe Ratio"
-            value={summary?.sharpe_ratio}
-            format="ratio"
-            tooltip="Risk-adjusted return vs risk-free rate. Above 1 is good, above 2 is excellent, above 3 is outstanding."
+          <DualMetricCard
+            title="Risk-Adjusted Returns"
+            size="sm"
+            metrics={[
+              {
+                label: 'Sharpe',
+                value: summary?.sharpe_ratio,
+                tooltip: 'Risk-adjusted return. Above 1 good, above 2 excellent.',
+              },
+              {
+                label: 'Sortino',
+                value: summary?.sortino_ratio,
+                tooltip: 'Like Sharpe but only penalizes downside volatility.',
+              },
+            ]}
           />
-          <MetricCard
-            title="Sortino Ratio"
-            value={summary?.sortino_ratio}
-            format="ratio"
-            tooltip="Like Sharpe but only penalizes downside volatility. Higher is better. More relevant for asymmetric returns."
-          />
-        </div>
-
-        {/* Row 3: Performance Chart */}
-        <MultiMetricChart data={timeSeries?.data_points ?? []} height={520} />
-
-        {/* Row 4: Best/Worst + Greeks */}
-        <div className="grid gap-6 md:grid-cols-3">
           <BestWorstCard
             title="Strategy Performance"
             best={summary?.best_strategy ?? null}
@@ -284,10 +336,10 @@ export default function Dashboard() {
             worst={summary?.worst_ticker ?? null}
             type="ticker"
           />
-          <GreeksPanel greeks={summary?.portfolio_greeks ?? null} />
+          <GreeksPanel greeks={portfolioGreeks ?? summary?.portfolio_greeks ?? null} />
         </div>
 
-        {/* Row 5: Risk Metrics */}
+        {/* Row 4: Risk Metrics Panel */}
         <RiskMetricsPanel
           expectancy={summary?.expectancy ?? 0}
           streakInfo={summary?.streak_info ?? {
@@ -297,6 +349,9 @@ export default function Dashboard() {
             current_streak_type: 'none',
           }}
         />
+
+        {/* Row 5: Performance Chart (at bottom) */}
+        <MultiMetricChart data={timeSeries?.data_points ?? []} height={350} />
       </div>
     </div>
   );

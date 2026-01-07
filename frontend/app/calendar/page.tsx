@@ -22,6 +22,7 @@ interface Execution {
   expiration: string | null;
   quantity: number;
   option_type: string | null;
+  open_close_indicator?: string;
 }
 
 interface DayData {
@@ -679,7 +680,7 @@ export default function CalendarPage() {
                           const numLegs = trade.num_legs || 1;
                           // Spread qty = total opening contracts / number of legs
                           const spreadQty = openingQty > 0 ? openingQty / numLegs : 0;
-                          const totalQty = spreadQty || trade.quantity || executions.reduce((sum, e) => sum + e.quantity, 0) / 2 || trade.num_legs;
+                          const totalQty = spreadQty || executions.reduce((sum, e) => sum + e.quantity, 0) / 2 || trade.num_legs;
 
                           const expDisplay = expirations.length > 0
                             ? new Date(expirations[0]!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
