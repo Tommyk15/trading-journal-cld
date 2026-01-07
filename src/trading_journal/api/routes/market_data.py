@@ -315,7 +315,7 @@ async def get_account_pnl(
 @router.get("/positions", response_model=PositionsMarketDataResponse)
 async def get_positions_market_data(
     force_refresh: bool = Query(False, description="Force refresh from live sources"),
-    include_greeks: bool = Query(False, description="Fetch Greeks for options (slower)"),
+    include_greeks: bool = Query(True, description="Fetch Greeks for options"),
     session: AsyncSession = Depends(get_db),
     service: MarketDataService = Depends(get_market_data_service),
 ):
@@ -526,7 +526,6 @@ async def get_positions_market_data(
             if include_greeks and leg.get("security_type") == "OPT" and leg.get("expiration") and leg.get("strike"):
                 try:
                     exp_date = datetime.strptime(leg["expiration"], "%Y%m%d")
-                    # Add timeout to prevent hanging on rate limits
                     _, greeks = await asyncio.wait_for(
                         service.get_option_data(
                             underlying=trade.underlying,
@@ -534,7 +533,7 @@ async def get_positions_market_data(
                             strike=Decimal(str(leg["strike"])),
                             option_type=leg["option_type"],
                         ),
-                        timeout=5.0  # 5 second timeout per option
+                        timeout=15.0  # 15 second timeout per option
                     )
                     if greeks:
                         multiplier = leg.get("multiplier", 100)

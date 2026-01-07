@@ -1,8 +1,11 @@
 """API routes for trade analytics."""
 
+import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -267,6 +270,77 @@ async def fetch_pending_greeks(
         trades_succeeded=succeeded,
         trades_failed=failed,
         message=f"Processed {len(trades)} trades: {succeeded} succeeded, {failed} failed",
+    )
+
+
+@router.post("/backfill-greeks", response_model=BatchFetchResponse)
+async def backfill_missing_greeks(
+    limit: int = Query(50, ge=1, le=500, description="Max trades to process"),
+    status: str = Query("OPEN", description="Trade status filter (OPEN, CLOSED, or ALL)"),
+    session: AsyncSession = Depends(get_db),
+):
+    """Backfill Greeks for trades that are missing them.
+
+    Unlike fetch-pending, this finds trades where delta_open is NULL
+    regardless of the greeks_pending flag.
+
+    Args:
+        limit: Maximum number of trades to process
+        status: Filter by trade status (OPEN, CLOSED, or ALL)
+        session: Database session
+
+    Returns:
+        Batch fetch statistics
+    """
+    # Get trades missing Greeks (exclude stock-only trades)
+    stock_strategies = ["Stock", "Long Stock", "Short Stock"]
+    conditions = [
+        Trade.delta_open.is_(None),
+        ~Trade.strategy_type.in_(stock_strategies),  # Only options have Greeks
+    ]
+
+    if status != "ALL":
+        conditions.append(Trade.status == status)
+
+    stmt = (
+        select(Trade)
+        .where(*conditions)
+        .order_by(Trade.opened_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    trades = list(result.scalars().all())
+
+    if not trades:
+        return BatchFetchResponse(
+            trades_processed=0,
+            trades_succeeded=0,
+            trades_failed=0,
+            message="No trades found missing Greeks",
+        )
+
+    succeeded = 0
+    failed = 0
+
+    for trade in trades:
+        try:
+            # Use the fetch endpoint logic
+            response = await fetch_trade_greeks(trade.id, FetchGreeksRequest(), session)
+            if response.success:
+                succeeded += 1
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Failed to fetch Greeks for trade {trade.id}: {e}")
+
+    await session.commit()
+
+    return BatchFetchResponse(
+        trades_processed=len(trades),
+        trades_succeeded=succeeded,
+        trades_failed=failed,
+        message=f"Backfilled {len(trades)} trades: {succeeded} succeeded, {failed} failed",
     )
 
 
@@ -541,6 +615,11 @@ async def fetch_trade_greeks(
                     )
 
                     # Store leg Greeks
+                    # Strip timezone from expiration (column is timezone-naive)
+                    exp_dt = leg["expiration"]
+                    if exp_dt and hasattr(exp_dt, 'tzinfo') and exp_dt.tzinfo is not None:
+                        exp_dt = exp_dt.replace(tzinfo=None)
+
                     leg_greeks = TradeLegGreeks(
                         trade_id=trade_id,
                         snapshot_type="OPEN",
@@ -548,7 +627,7 @@ async def fetch_trade_greeks(
                         underlying=trade.underlying,
                         option_type=leg["option_type"],
                         strike=leg["strike"],
-                        expiration=leg["expiration"],
+                        expiration=exp_dt,
                         quantity=leg["quantity"],
                         delta=greeks.delta,
                         gamma=greeks.gamma,

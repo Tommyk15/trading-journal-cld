@@ -979,11 +979,11 @@ class TradeGroupingService:
         await self.session.commit()
 
         # Auto-fetch Greeks for newly created option trades
-        # DISABLED: Rate limiting makes this too slow. Revisit approach.
-        # if stats["trades_created"] > 0:
-        #     greeks_stats = await self.fetch_greeks_for_pending_trades()
-        #     stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
-        #     stats["greeks_failed"] = greeks_stats["trades_failed"]
+        # Re-enabled now that Polygon rate limiting is fixed for Starter+ plans
+        if stats["trades_created"] > 0:
+            greeks_stats = await self.fetch_greeks_for_pending_trades()
+            stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
+            stats["greeks_failed"] = greeks_stats["trades_failed"]
 
         return stats
 
@@ -1151,12 +1151,10 @@ class TradeGroupingService:
         stats["expired_trades_marked"] = expired_stats["trades_marked"]
 
         # Step 10: Auto-fetch Greeks for newly created option trades
-        # DISABLED: Rate limiting makes this too slow. Revisit approach.
-        # greeks_stats = await self.fetch_greeks_for_pending_trades()
-        # stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
-        # stats["greeks_failed"] = greeks_stats["trades_failed"]
-        stats["greeks_fetched"] = 0
-        stats["greeks_failed"] = 0
+        # Re-enabled now that Polygon rate limiting is fixed for Starter+ plans
+        greeks_stats = await self.fetch_greeks_for_pending_trades()
+        stats["greeks_fetched"] = greeks_stats["trades_succeeded"]
+        stats["greeks_failed"] = greeks_stats["trades_failed"]
 
         return stats
 

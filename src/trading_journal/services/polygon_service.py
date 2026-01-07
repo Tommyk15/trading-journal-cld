@@ -16,9 +16,15 @@ logger = logging.getLogger(__name__)
 # Polygon API base URL
 POLYGON_BASE_URL = "https://api.polygon.io"
 
-# Rate limiting: Options Starter tier allows 5 calls/minute
-RATE_LIMIT_CALLS = 5
-RATE_LIMIT_PERIOD = 60  # seconds
+# Rate limiting settings by tier:
+# - Options Basic: 5 calls/minute (free tier)
+# - Options Starter ($29/mo): Unlimited API calls (but has burst limits)
+# - Options Developer ($79/mo): Unlimited API calls
+# Set to 0 to disable strict per-minute limiting for Starter/Developer/Advanced tiers
+# Note: We still add a small delay between requests to avoid burst rate limits
+RATE_LIMIT_CALLS = 0  # Disabled for unlimited plans
+RATE_LIMIT_PERIOD = 60  # seconds (only used if RATE_LIMIT_CALLS > 0)
+MIN_REQUEST_INTERVAL = 0.5  # Minimum seconds between requests (avoids burst limits)
 
 
 @dataclass
@@ -121,59 +127,91 @@ class PolygonService:
         return self._client
 
     async def _rate_limit(self) -> None:
-        """Enforce rate limiting."""
+        """Enforce rate limiting and minimum request interval."""
         now = asyncio.get_event_loop().time()
 
-        # Remove calls older than the rate limit period
-        self._call_times = [t for t in self._call_times if now - t < RATE_LIMIT_PERIOD]
+        # Enforce minimum interval between requests (avoids burst limits)
+        if self._call_times and MIN_REQUEST_INTERVAL > 0:
+            last_call = self._call_times[-1]
+            elapsed = now - last_call
+            if elapsed < MIN_REQUEST_INTERVAL:
+                await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
+                now = asyncio.get_event_loop().time()
 
-        # If at limit, wait
-        if len(self._call_times) >= RATE_LIMIT_CALLS:
-            wait_time = RATE_LIMIT_PERIOD - (now - self._call_times[0])
-            if wait_time > 0:
-                logger.warning(f"Rate limit reached, waiting {wait_time:.1f}s")
-                await asyncio.sleep(wait_time)
-                self._call_times = []
+        # Skip strict per-minute rate limiting if disabled (unlimited plans)
+        if RATE_LIMIT_CALLS > 0:
+            # Remove calls older than the rate limit period
+            self._call_times = [t for t in self._call_times if now - t < RATE_LIMIT_PERIOD]
+
+            # If at limit, wait
+            if len(self._call_times) >= RATE_LIMIT_CALLS:
+                wait_time = RATE_LIMIT_PERIOD - (now - self._call_times[0])
+                if wait_time > 0:
+                    logger.warning(f"Rate limit reached, waiting {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+                    self._call_times = []
+                    now = asyncio.get_event_loop().time()
 
         self._call_times.append(now)
 
-    async def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
-        """Make a rate-limited API request.
+    async def _request(
+        self, method: str, endpoint: str, max_retries: int = 3, **kwargs
+    ) -> dict[str, Any]:
+        """Make an API request with retry logic for rate limits.
 
         Args:
             method: HTTP method
             endpoint: API endpoint
+            max_retries: Maximum number of retries for 429 errors
             **kwargs: Additional request arguments
 
         Returns:
             JSON response data
 
         Raises:
-            PolygonRateLimitError: If rate limited by API
+            PolygonRateLimitError: If rate limited after all retries
             PolygonAPIError: If API returns an error
         """
         await self._rate_limit()
         client = await self._ensure_client()
 
-        try:
-            response = await client.request(method, endpoint, **kwargs)
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.request(method, endpoint, **kwargs)
 
-            if response.status_code == 429:
-                raise PolygonRateLimitError("Polygon API rate limit exceeded")
+                if response.status_code == 429:
+                    # Retry with exponential backoff
+                    if attempt < max_retries:
+                        wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                        logger.debug(f"Rate limited, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    raise PolygonRateLimitError("Polygon API rate limit exceeded")
 
-            if response.status_code == 403:
-                raise PolygonAPIError("Invalid API key or insufficient permissions")
+                if response.status_code == 403:
+                    raise PolygonAPIError("Invalid API key or insufficient permissions")
 
-            if response.status_code == 404:
-                return {}  # No data found
+                if response.status_code == 404:
+                    return {}  # No data found
 
-            response.raise_for_status()
-            return response.json()
+                response.raise_for_status()
+                return response.json()
 
-        except httpx.HTTPStatusError as e:
-            raise PolygonAPIError(f"HTTP error: {e.response.status_code}") from e
-        except httpx.RequestError as e:
-            raise PolygonAPIError(f"Request failed: {e}") from e
+            except httpx.HTTPStatusError as e:
+                last_error = PolygonAPIError(f"HTTP error: {e.response.status_code}")
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise last_error from e
+            except httpx.RequestError as e:
+                last_error = PolygonAPIError(f"Request failed: {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise last_error from e
+
+        raise last_error or PolygonAPIError("Unknown error")
 
     def _build_option_ticker(
         self,
@@ -196,7 +234,14 @@ class PolygonService:
         Returns:
             OCC-formatted option ticker
         """
-        date_str = expiration.strftime("%y%m%d")
+        # Handle timezone offset: if UTC time is 20:00 or later, it's likely
+        # midnight or later in an eastern timezone (Israel +2/+3), so the actual
+        # US market expiration date is the next calendar day
+        exp = expiration
+        if hasattr(exp, 'hour') and exp.hour >= 20:
+            from datetime import timedelta
+            exp = exp + timedelta(days=1)
+        date_str = exp.strftime("%y%m%d")
         strike_int = int(strike * 1000)
         strike_str = f"{strike_int:08d}"
         return f"O:{underlying}{date_str}{option_type}{strike_str}"

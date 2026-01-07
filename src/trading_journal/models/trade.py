@@ -90,10 +90,10 @@ class Trade(Base):
     iv_percentile_custom_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     iv_rank_custom_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     iv_custom_period_days: Mapped[int | None] = mapped_column(Integer)  # Custom lookback period
-    delta_open: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
-    gamma_open: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
-    theta_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
-    vega_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    delta_open: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))  # Position-level, can be large
+    gamma_open: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))  # Position-level, can be large
+    theta_open: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))  # Position-level, can be large
+    vega_open: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))   # Position-level, can be large
     rho_open: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     pop_open: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # Probability of Profit 0-100
 
