@@ -240,17 +240,38 @@ class TradeAnalyticsService:
         if not legs:
             return breakevens
 
-        if strategy_type == StrategyType.VERTICAL_CALL.value:
-            # Call credit spread: breakeven = lower strike + premium received
-            # Call debit spread: breakeven = lower strike + premium paid
-            lower_strike = min(leg.strike for leg in legs if leg.option_type == "C")
-            breakevens.append(lower_strike + abs(net_premium))
+        # Map database strategy types to calculation categories
+        vertical_call_types = [
+            StrategyType.VERTICAL_CALL.value,
+            "Bull Call Spread",
+            "Bear Call Spread",
+        ]
+        vertical_put_types = [
+            StrategyType.VERTICAL_PUT.value,
+            "Bull Put Spread",
+            "Bear Put Spread",
+        ]
+        single_types = [
+            StrategyType.SINGLE.value,
+            "Long Call",
+            "Short Call",
+            "Long Put",
+            "Short Put",
+        ]
 
-        elif strategy_type == StrategyType.VERTICAL_PUT.value:
-            # Put credit spread: breakeven = higher strike - premium received
-            # Put debit spread: breakeven = higher strike - premium paid
-            higher_strike = max(leg.strike for leg in legs if leg.option_type == "P")
-            breakevens.append(higher_strike - abs(net_premium))
+        if strategy_type in vertical_call_types:
+            # Call spread: breakeven = lower strike + premium paid/received
+            call_legs = [leg for leg in legs if leg.option_type == "C"]
+            if call_legs:
+                lower_strike = min(leg.strike for leg in call_legs)
+                breakevens.append(lower_strike + abs(net_premium))
+
+        elif strategy_type in vertical_put_types:
+            # Put spread: breakeven = higher strike - premium paid/received
+            put_legs = [leg for leg in legs if leg.option_type == "P"]
+            if put_legs:
+                higher_strike = max(leg.strike for leg in put_legs)
+                breakevens.append(higher_strike - abs(net_premium))
 
         elif strategy_type == StrategyType.IRON_CONDOR.value:
             # Two breakevens: put side and call side
@@ -277,7 +298,7 @@ class TradeAnalyticsService:
             breakevens.append(put_strike - abs(net_premium))
             breakevens.append(call_strike + abs(net_premium))
 
-        elif strategy_type == StrategyType.SINGLE.value:
+        elif strategy_type in single_types:
             # Single option
             leg = legs[0]
             if leg.quantity > 0:  # Long
@@ -677,15 +698,26 @@ class TradeAnalyticsService:
         # Calculate net premium
         net_premium = self._calculate_net_premium(executions)
 
-        # Calculate max profit/risk
+        # Get the number of contracts (use max absolute quantity from legs)
+        num_contracts = max(abs(leg.quantity) for leg in legs) if legs else 1
+
+        # Calculate max profit/risk in dollar terms (multiplier=100 for options)
         max_profit, max_risk = self.calculate_max_profit_risk(
             legs,
             trade.strategy_type or "",
             net_premium,
-            multiplier=1,
+            multiplier=100,  # Standard option contract multiplier
         )
-        trade.max_profit = max_profit
-        trade.max_risk = max_risk
+
+        # Multiply by number of contracts for total position value
+        if max_profit is not None:
+            trade.max_profit = max_profit * num_contracts
+        else:
+            trade.max_profit = None
+        if max_risk is not None:
+            trade.max_risk = max_risk * num_contracts
+        else:
+            trade.max_risk = None
 
         # Calculate PoP if we have IV
         dte = self.calculate_dte(legs)
@@ -704,11 +736,15 @@ class TradeAnalyticsService:
                 )
                 trade.pop_open = pop
 
-        # Calculate collateral
-        trade.collateral_calculated = self._calculate_collateral(
+        # Calculate collateral (multiply by num_contracts for total position)
+        collateral = self._calculate_collateral(
             trade.strategy_type or "",
             legs,
         )
+        if collateral is not None:
+            trade.collateral_calculated = collateral * num_contracts
+        else:
+            trade.collateral_calculated = None
 
         await session.flush()
         return True

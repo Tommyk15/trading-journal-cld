@@ -344,6 +344,95 @@ async def backfill_missing_greeks(
     )
 
 
+@router.post("/backfill-analytics", response_model=BatchFetchResponse)
+async def backfill_missing_analytics(
+    limit: int = Query(100, ge=1, le=1000, description="Max trades to process"),
+    status: str = Query("OPEN", description="Trade status filter (OPEN, CLOSED, or ALL)"),
+    force: bool = Query(False, description="Force recalculation even if analytics exist"),
+    session: AsyncSession = Depends(get_db),
+):
+    """Backfill analytics (max_profit, max_risk, pop_open) for trades that have Greeks but missing analytics.
+
+    This is faster than backfill-greeks as it doesn't need to call external APIs.
+    It only processes trades that already have delta_open populated.
+
+    Args:
+        limit: Maximum number of trades to process
+        status: Filter by trade status (OPEN, CLOSED, or ALL)
+        force: Force recalculation even if analytics exist
+        session: Database session
+
+    Returns:
+        Batch update statistics
+    """
+    from trading_journal.services.fred_service import FredService
+
+    # Get trades with Greeks (exclude stock-only trades)
+    from sqlalchemy import or_
+    stock_strategies = ["Stock", "Long Stock", "Short Stock"]
+    conditions = [
+        Trade.delta_open.isnot(None),  # Has Greeks
+        ~Trade.strategy_type.in_(stock_strategies),  # Only options have analytics
+    ]
+
+    # Only filter for missing analytics if not forcing recalculation
+    if not force:
+        conditions.append(or_(Trade.max_profit.is_(None), Trade.pop_open.is_(None)))
+
+    if status != "ALL":
+        conditions.append(Trade.status == status)
+
+    stmt = (
+        select(Trade)
+        .where(*conditions)
+        .order_by(Trade.opened_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    trades = list(result.scalars().all())
+
+    if not trades:
+        return BatchFetchResponse(
+            trades_processed=0,
+            trades_succeeded=0,
+            trades_failed=0,
+            message="No trades found missing analytics",
+        )
+
+    # Get risk-free rate once
+    try:
+        async with FredService() as fred:
+            rate_data = await fred.get_risk_free_rate()
+            risk_free_rate = rate_data.rate
+    except Exception:
+        risk_free_rate = Decimal("0.05")
+
+    analytics_service = TradeAnalyticsService(risk_free_rate=risk_free_rate)
+
+    succeeded = 0
+    failed = 0
+
+    for trade in trades:
+        try:
+            result = await analytics_service.populate_analytics_only(trade, session)
+            if result:
+                succeeded += 1
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Failed to populate analytics for trade {trade.id}: {e}")
+
+    await session.commit()
+
+    return BatchFetchResponse(
+        trades_processed=len(trades),
+        trades_succeeded=succeeded,
+        trades_failed=failed,
+        message=f"Backfilled analytics for {len(trades)} trades: {succeeded} succeeded, {failed} failed",
+    )
+
+
 # ============================================================================
 # Trade-specific Analytics (parameterized routes)
 # ============================================================================
@@ -673,6 +762,72 @@ async def fetch_trade_greeks(
         trade.iv_open = trade_iv
         trade.greeks_source = "POLYGON"
         trade.greeks_pending = False
+
+        # Calculate net premium from executions
+        net_premium = Decimal("0")
+        total_contracts = Decimal("0")
+        unique_strikes = set()
+        for exec in executions:
+            if exec.security_type == "OPT" and exec.open_close_indicator == "O":
+                qty = abs(Decimal(str(exec.quantity)))
+                premium_per_share = Decimal(str(exec.price))
+                if exec.side == "SLD":
+                    net_premium += premium_per_share * qty
+                else:
+                    net_premium -= premium_per_share * qty
+                total_contracts += qty
+                unique_strikes.add(exec.strike)
+
+        # Normalize to per-spread premium
+        if total_contracts > 0 and unique_strikes:
+            num_legs = len(unique_strikes)
+            contracts_per_leg = total_contracts / num_legs if num_legs > 0 else total_contracts
+            if contracts_per_leg > 0:
+                net_premium = net_premium / contracts_per_leg
+
+        # Calculate max profit/risk
+        max_profit, max_risk = analytics_service.calculate_max_profit_risk(
+            leg_data_list,
+            trade.strategy_type or "",
+            net_premium,
+            multiplier=100,  # Standard option contract multiplier
+        )
+
+        # Multiply by number of contracts for total position value
+        num_contracts = max(abs(leg.quantity) for leg in leg_data_list) if leg_data_list else 1
+        if max_profit is not None:
+            trade.max_profit = max_profit * num_contracts
+        if max_risk is not None:
+            trade.max_risk = max_risk * num_contracts
+
+        # Calculate DTE
+        dte = analytics_service.calculate_dte(leg_data_list)
+
+        # Calculate PoP if we have IV and underlying price
+        if trade_iv and underlying_price and dte and dte > 0:
+            breakevens = analytics_service.calculate_breakevens(
+                leg_data_list, trade.strategy_type or "", net_premium
+            )
+            if breakevens:
+                is_credit = net_premium > 0
+                pop = analytics_service.calculate_pop_black_scholes(
+                    underlying_price,
+                    breakevens[0],
+                    trade_iv,
+                    dte,
+                    is_credit,
+                )
+                trade.pop_open = pop
+
+        # Calculate collateral (multiply by num_contracts for total position)
+        collateral = analytics_service._calculate_collateral(
+            trade.strategy_type or "",
+            leg_data_list,
+        )
+        if collateral is not None:
+            trade.collateral_calculated = collateral * num_contracts
+        else:
+            trade.collateral_calculated = None
 
     await session.commit()
 
